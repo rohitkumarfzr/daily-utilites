@@ -1,0 +1,416 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Workbench</title>
+  <link rel="stylesheet" href="static/theme.css" />
+  <style>
+    body.shell {
+      display: grid;
+      grid-template-rows: auto 1fr;
+      height: 100vh;
+      background: var(--bench);
+      overflow: hidden;
+    }
+
+    /* ---------- tab strip ---------- */
+    .strip {
+      display: flex;
+      align-items: flex-end;
+      gap: 18px;
+      padding: 10px 14px 0;
+      border-bottom: 1px solid var(--rule);
+      min-width: 0;
+    }
+    .brand {
+      font-weight: 700;
+      font-size: var(--t-lg);
+      letter-spacing: -0.03em;
+      padding: 0 4px 9px;
+      white-space: nowrap;
+    }
+    .brand span { color: var(--graphite); font-weight: 400; }
+
+    .tabs {
+      display: flex;
+      align-items: flex-end;
+      gap: 2px;
+      overflow-x: auto;
+      scrollbar-width: thin;
+      min-width: 0;
+      margin-bottom: -1px; /* active tab sits on the strip's border */
+    }
+    .tab {
+      display: flex;
+      align-items: center;
+      flex-shrink: 0;
+      max-width: 240px;
+      border: 1px solid transparent;
+      border-bottom: none;
+      border-radius: var(--r-md) var(--r-md) 0 0;
+      color: var(--graphite);
+    }
+    .tab:hover { color: var(--ink); background: rgba(255, 255, 255, 0.45); }
+    .tab[data-active="true"] {
+      background: var(--sheet);
+      border-color: var(--rule);
+      color: var(--ink);
+      padding-bottom: 1px; /* covers the strip border */
+    }
+    .tab-btn {
+      font: inherit;
+      font-size: var(--t-sm);
+      font-weight: 500;
+      color: inherit;
+      background: none;
+      border: 0;
+      padding: 9px 6px 9px 14px;
+      cursor: pointer;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      border-radius: var(--r-md) var(--r-md) 0 0;
+    }
+    .tab[data-active="true"] .tab-btn { font-weight: 600; }
+    .tab-home .tab-btn { padding-right: 14px; }
+    .tab-close {
+      font: inherit;
+      line-height: 1;
+      width: 22px;
+      height: 22px;
+      margin-right: 8px;
+      border: 0;
+      border-radius: 50%;
+      background: none;
+      color: inherit;
+      cursor: pointer;
+      font-size: 15px;
+      opacity: 0.6;
+    }
+    .tab-close:hover { opacity: 1; background: var(--bench); }
+
+    /* ---------- panes ---------- */
+    .panes { position: relative; background: var(--sheet); min-height: 0; }
+    .pane { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; display: block; }
+    .pane[hidden] { display: none; }
+
+    /* ---------- home ---------- */
+    .home { overflow-y: auto; }
+    .home-inner {
+      max-width: 980px;
+      padding: clamp(28px, 6vh, 64px) clamp(18px, 4vw, 48px) 48px;
+    }
+    .home-top {
+      display: flex;
+      align-items: end;
+      justify-content: space-between;
+      gap: 24px;
+      flex-wrap: wrap;
+      margin-bottom: 28px;
+    }
+    .home h1 { font-size: var(--t-2xl); letter-spacing: -0.03em; }
+    .search { width: min(320px, 100%); }
+
+    .tool-list { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--ink); }
+    .tool-item {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      align-items: center;
+      gap: 12px;
+      border-bottom: 1px solid var(--rule);
+    }
+    .tool-open {
+      display: grid;
+      grid-template-columns: minmax(220px, 1fr) minmax(0, 1.3fr);
+      align-items: baseline;
+      gap: 6px 32px;
+      text-align: left;
+      font: inherit;
+      color: inherit;
+      background: none;
+      border: 0;
+      padding: 22px 4px;
+      cursor: pointer;
+    }
+    .tool-name {
+      font-size: var(--t-xl);
+      font-weight: 600;
+      letter-spacing: -0.02em;
+      font-variation-settings: "opsz" 96;
+    }
+    .tool-open:hover .tool-name { text-decoration: underline; text-decoration-thickness: 2px; text-underline-offset: 5px; }
+    .tool-desc { color: var(--graphite); max-width: 52ch; }
+    .tool-state { font-size: var(--t-xs); color: var(--pass); font-weight: 600; margin-left: 10px; }
+    .tool-another { white-space: nowrap; }
+
+    .empty { padding: 32px 4px; color: var(--graphite); }
+    .footnote { margin-top: 28px; color: var(--graphite); font-size: var(--t-sm); max-width: 62ch; }
+
+    @media (max-width: 720px) {
+      .brand span { display: none; }
+      .tool-open { grid-template-columns: 1fr; }
+      .tool-item { grid-template-columns: 1fr; }
+      .tool-another { justify-self: start; margin-bottom: 16px; }
+    }
+  </style>
+</head>
+
+<body class="shell">
+  <header class="strip">
+    <div class="brand">Workbench <span>dev tools</span></div>
+    <nav class="tabs" id="tabs" role="tablist" aria-label="Open tools"></nav>
+  </header>
+
+  <main class="panes" id="panes">
+    <section class="pane home" id="pane-home" role="tabpanel" aria-labelledby="tabbtn-home">
+      <div class="home-inner">
+        <div class="home-top">
+          <h1>Tools</h1>
+          <label class="search">
+            <span class="sr-only">Search tools</span>
+            <input id="search" type="search" placeholder="Search tools  ( / )" autocomplete="off" />
+          </label>
+        </div>
+        <ul class="tool-list" id="toolList"></ul>
+        <p class="empty" id="empty" hidden>No tool matches that search.</p>
+        <p class="footnote">
+          Tools open as tabs here and keep their work while you switch between them.
+          Browser Back and Forward move through the tabs you visited.
+        </p>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    const STORE_KEY = "workbench.tabs";
+    const tools = new Map();          // file -> {file, name, description}
+    let tabs = [];                    // [{id, file}]
+    let active = "home";
+    let recent = ["home"];            // most-recently-used order, for picking a tab after close
+
+    const $tabs = document.getElementById("tabs");
+    const $panes = document.getElementById("panes");
+    const $list = document.getElementById("toolList");
+    const $search = document.getElementById("search");
+
+    const stem = (file) => file.replace(/\.html$/, "");
+    const toolName = (file) => tools.get(file)?.name || stem(file);
+    const pane = (id) => document.getElementById(`pane-${id}`);
+
+    function uniqueId(file) {
+      let id = stem(file), n = 1;
+      while (tabs.some((t) => t.id === id)) id = `${stem(file)}-${++n}`;
+      return id;
+    }
+
+    function labelFor(tab) {
+      const same = tabs.filter((t) => t.file === tab.file);
+      const name = toolName(tab.file);
+      return same.length > 1 ? `${name} ${same.indexOf(tab) + 1}` : name;
+    }
+
+    /* ---------- tabs ---------- */
+    function createTab(tab, { load = true } = {}) {
+      tabs.push(tab);
+      const frame = document.createElement("iframe");
+      frame.className = "pane";
+      frame.id = `pane-${tab.id}`;
+      frame.title = toolName(tab.file);
+      frame.setAttribute("role", "tabpanel");
+      frame.setAttribute("allow", "clipboard-read; clipboard-write");
+      frame.dataset.src = `tools/${tab.file}?tab=${encodeURIComponent(tab.id)}`;
+      frame.hidden = true;
+      if (load) frame.src = frame.dataset.src;
+      $panes.appendChild(frame);
+    }
+
+    function openTool(file, { another = false } = {}) {
+      if (!another) {
+        const existing = tabs.find((t) => t.file === file);
+        if (existing) return activate(existing.id);
+      }
+      const tab = { id: uniqueId(file), file };
+      createTab(tab);
+      activate(tab.id);
+    }
+
+    function activate(id, { push = true } = {}) {
+      if (id !== "home" && !tabs.some((t) => t.id === id)) id = "home";
+      active = id;
+      recent = [id, ...recent.filter((r) => r !== id)];
+
+      for (const el of $panes.children) el.hidden = el.id !== `pane-${id}`;
+      const p = pane(id);
+      if (p.tagName === "IFRAME" && !p.src) p.src = p.dataset.src; // lazy-load restored tabs
+
+      const tab = tabs.find((t) => t.id === id);
+      document.title = tab ? `${labelFor(tab)} – Workbench` : "Workbench";
+      if (push && history.state?.id !== id) {
+        history.pushState({ id, file: tab?.file }, "", id === "home" ? location.pathname : `#${id}`);
+      }
+      renderTabs();
+      renderList();
+      save();
+    }
+
+    function closeTab(id) {
+      const i = tabs.findIndex((t) => t.id === id);
+      if (i < 0) return;
+      tabs.splice(i, 1);
+      pane(id).remove();
+      recent = recent.filter((r) => r !== id);
+      if (active === id) {
+        const next = recent[0] || "home";
+        const tab = tabs.find((t) => t.id === next);
+        history.replaceState({ id: next, file: tab?.file }, "", next === "home" ? location.pathname : `#${next}`);
+        activate(next, { push: false });
+        document.getElementById(`tabbtn-${next}`)?.focus();
+      } else {
+        renderTabs();
+        renderList();
+        save();
+      }
+    }
+
+    function renderTabs() {
+      $tabs.innerHTML = "";
+      const all = [{ id: "home" }, ...tabs];
+      all.forEach((t) => {
+        const isHome = t.id === "home";
+        const wrap = document.createElement("div");
+        wrap.className = "tab" + (isHome ? " tab-home" : "");
+        wrap.dataset.active = String(t.id === active);
+
+        const btn = document.createElement("button");
+        btn.className = "tab-btn";
+        btn.id = `tabbtn-${t.id}`;
+        btn.setAttribute("role", "tab");
+        btn.setAttribute("aria-selected", String(t.id === active));
+        btn.setAttribute("aria-controls", `pane-${t.id}`);
+        btn.tabIndex = t.id === active ? 0 : -1;
+        btn.textContent = isHome ? "Tools" : labelFor(t);
+        btn.title = btn.textContent;
+        btn.onclick = () => activate(t.id);
+        if (!isHome) {
+          btn.onauxclick = (e) => { if (e.button === 1) closeTab(t.id); };
+        }
+        wrap.appendChild(btn);
+
+        if (!isHome) {
+          const x = document.createElement("button");
+          x.className = "tab-close";
+          x.setAttribute("aria-label", `Close ${btn.textContent}`);
+          x.title = "Close tab";
+          x.tabIndex = -1;
+          x.textContent = "×";
+          x.onclick = () => closeTab(t.id);
+          wrap.appendChild(x);
+        }
+        $tabs.appendChild(wrap);
+      });
+      document.getElementById(`tabbtn-${active}`)?.scrollIntoView({ block: "nearest", inline: "nearest" });
+    }
+
+    // Arrow keys move between tabs, Delete closes the focused one
+    $tabs.addEventListener("keydown", (e) => {
+      const ids = ["home", ...tabs.map((t) => t.id)];
+      const cur = ids.indexOf(document.activeElement?.id?.replace("tabbtn-", ""));
+      if (cur < 0) return;
+      let next = null;
+      if (e.key === "ArrowRight") next = ids[(cur + 1) % ids.length];
+      if (e.key === "ArrowLeft") next = ids[(cur - 1 + ids.length) % ids.length];
+      if (e.key === "Home") next = ids[0];
+      if (e.key === "End") next = ids[ids.length - 1];
+      if (next) { e.preventDefault(); activate(next); document.getElementById(`tabbtn-${next}`).focus(); }
+      if (e.key === "Delete" && ids[cur] !== "home") closeTab(ids[cur]);
+    });
+
+    /* ---------- home list ---------- */
+    function renderList() {
+      const q = $search.value.trim().toLowerCase();
+      const items = [...tools.values()].filter((t) =>
+        (t.name + " " + t.description).toLowerCase().includes(q));
+      $list.innerHTML = "";
+      document.getElementById("empty").hidden = items.length > 0;
+
+      items.forEach((t) => {
+        const openCount = tabs.filter((x) => x.file === t.file).length;
+        const li = document.createElement("li");
+        li.className = "tool-item";
+
+        const open = document.createElement("button");
+        open.className = "tool-open";
+        open.innerHTML = `<span class="tool-name"></span><span class="tool-desc"></span>`;
+        open.querySelector(".tool-name").textContent = t.name;
+        open.querySelector(".tool-desc").textContent = t.description;
+        if (openCount) {
+          const s = document.createElement("span");
+          s.className = "tool-state";
+          s.textContent = openCount > 1 ? `${openCount} tabs open` : "Open";
+          open.querySelector(".tool-name").appendChild(s);
+        }
+        open.onclick = () => openTool(t.file);
+
+        const another = document.createElement("button");
+        another.className = "btn btn-quiet tool-another";
+        another.textContent = "Open another tab";
+        another.setAttribute("aria-label", `Open another ${t.name} tab`);
+        another.onclick = () => openTool(t.file, { another: true });
+
+        li.append(open, another);
+        $list.appendChild(li);
+      });
+    }
+
+    $search.addEventListener("input", renderList);
+    $search.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") $list.querySelector(".tool-open")?.click();
+    });
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "/" && active === "home" && document.activeElement !== $search) {
+        e.preventDefault();
+        $search.focus();
+      }
+    });
+
+    /* ---------- history (back stack) ---------- */
+    window.addEventListener("popstate", (e) => {
+      const s = e.state || { id: location.hash.slice(1) || "home" };
+      if (s.id !== "home" && !tabs.some((t) => t.id === s.id)) {
+        // Going back to a tab that was closed: bring it back
+        const file = s.file || `${s.id}.html`;
+        if (tools.has(file)) createTab({ id: s.id, file });
+      }
+      activate(s.id, { push: false });
+    });
+
+    /* ---------- persistence ---------- */
+    function save() {
+      localStorage.setItem(STORE_KEY, JSON.stringify({ tabs, active }));
+    }
+
+    async function init() {
+      const res = await fetch("api/tools.json");
+      (await res.json()).forEach((t) => tools.set(t.file, t));
+
+      let saved = {};
+      try { saved = JSON.parse(localStorage.getItem(STORE_KEY)) || {}; } catch {}
+      (saved.tabs || []).filter((t) => tools.has(t.file)).forEach((t) => createTab(t, { load: false }));
+
+      // A hash in the URL wins (bookmark / reload), then the last active tab
+      let start = location.hash.slice(1) || saved.active || "home";
+      if (start !== "home" && !tabs.some((t) => t.id === start)) {
+        const file = `${start}.html`;
+        if (tools.has(file)) createTab({ id: start, file }, { load: false });
+        else start = "home";
+      }
+      const tab = tabs.find((t) => t.id === start);
+      history.replaceState({ id: start, file: tab?.file }, "", start === "home" ? location.pathname : `#${start}`);
+      activate(start, { push: false });
+    }
+
+    init();
+  </script>
+</body>
+</html>

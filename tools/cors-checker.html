@@ -1,0 +1,491 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>CORS checker</title>
+  <meta name="description" content="Check whether APIs accept browser requests from your sites. The server sends the preflight and request, so nothing runs in your browser." />
+  <link rel="stylesheet" href="../static/theme.css" />
+  <style>
+    body { height: 100%; }
+    .layout {
+      display: grid;
+      grid-template-columns: minmax(340px, 420px) 1fr;
+      height: 100vh;
+    }
+
+    /* ---------- left: inputs ---------- */
+    .inputs {
+      background: var(--bench);
+      border-right: 1px solid var(--rule);
+      overflow-y: auto;
+      padding: 24px 24px 32px;
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+    }
+    .inputs h1 { font-size: var(--t-xl); }
+    .inputs > header p { margin: 6px 0 0; color: var(--graphite); font-size: var(--t-sm); }
+    #urls { min-height: 190px; }
+    #origins { min-height: 110px; }
+    .pair { display: grid; grid-template-columns: 120px 1fr; gap: 12px; }
+    .checks { display: grid; gap: 10px; }
+    .line-error { color: var(--fail); font-size: var(--t-xs); margin: 0; }
+    .run { display: grid; gap: 8px; position: sticky; bottom: -32px; padding: 12px 0 0; background: var(--bench); }
+    .run .btn { padding: 12px 16px; font-size: var(--t-md); }
+    .run .hint { text-align: center; }
+
+    /* ---------- right: results ---------- */
+    .results { overflow: auto; padding: 24px clamp(16px, 3vw, 36px) 40px; min-width: 0; }
+    .results-top { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; flex-wrap: wrap; margin-bottom: 16px; }
+    .summary { font-size: var(--t-lg); font-weight: 600; letter-spacing: -0.01em; }
+    .summary .n-pass { color: var(--pass); }
+    .summary .n-fail { color: var(--fail); }
+    .summary .n-err { color: var(--warn); }
+
+    .blank { max-width: 46ch; margin-top: 12vh; }
+    .blank h2 { font-size: var(--t-2xl); letter-spacing: -0.03em; margin-bottom: 12px; }
+    .blank p { color: var(--graphite); margin: 0 0 8px; }
+
+    /* the result grid — the one loud element */
+    .grid-wrap { overflow-x: auto; border: 1px solid var(--ink); border-radius: var(--r-md); }
+    table.matrix { border-collapse: collapse; width: 100%; }
+    .matrix th, .matrix td { border-bottom: 1px solid var(--rule); border-right: 1px solid var(--rule); }
+    .matrix tr > :last-child { border-right: 0; }
+    .matrix tbody tr:last-child > * { border-bottom: 0; }
+    .matrix thead th {
+      background: var(--sheet);
+      font-size: var(--t-sm);
+      font-weight: 600;
+      text-align: left;
+      padding: 10px 12px;
+      white-space: nowrap;
+      border-bottom-color: var(--ink);
+    }
+    .matrix thead th span { display: block; font-weight: 400; color: var(--graphite); font-size: var(--t-xs); }
+    .matrix tbody th {
+      text-align: left;
+      font-weight: 400;
+      padding: 10px 12px;
+      min-width: 240px;
+      max-width: 420px;
+      background: var(--sheet);
+    }
+    .url-host { font-family: var(--mono); font-size: var(--t-sm); font-weight: 500; word-break: break-all; }
+    .url-path { font-family: var(--mono); font-size: var(--t-xs); color: var(--graphite); word-break: break-all; }
+    .matrix td { padding: 0; min-width: 150px; }
+
+    .cell {
+      width: 100%;
+      min-height: 64px;
+      font: inherit;
+      font-weight: 700;
+      font-size: var(--t-md);
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 12px 14px;
+      border: 0;
+      cursor: pointer;
+      text-align: left;
+      background: var(--sheet);
+      color: var(--graphite);
+    }
+    .cell .glyph { font-size: 1.5rem; line-height: 1; width: 1.2em; text-align: center; }
+    .cell small { display: block; font-weight: 500; font-size: var(--t-xs); opacity: 0.85; }
+    .cell[data-state="pass"] { background: var(--pass-bg); color: var(--pass); }
+    .cell[data-state="fail"] { background: var(--fail-bg); color: var(--fail); }
+    .cell[data-state="error"] { background: var(--warn-bg); color: var(--warn); }
+    .cell[data-state="pending"] { cursor: progress; }
+    .cell[data-state="pending"] .glyph { animation: pulse 1s ease-in-out infinite alternate; }
+    .cell[aria-pressed="true"] { box-shadow: inset 0 0 0 3px var(--ink); }
+    @keyframes pulse { from { opacity: 0.25; } to { opacity: 1; } }
+
+    /* ---------- detail ---------- */
+    .detail { margin-top: 28px; }
+    .detail-head { display: flex; gap: 14px; align-items: flex-start; margin-bottom: 14px; }
+    .detail-head .badge { flex-shrink: 0; }
+    .detail-head h2 { font-size: var(--t-lg); }
+    .detail-head p { margin: 4px 0 0; color: var(--graphite); font-size: var(--t-sm); word-break: break-all; }
+    .badge {
+      font-weight: 700;
+      font-size: var(--t-sm);
+      padding: 4px 10px;
+      border-radius: 999px;
+    }
+    .badge.pass { background: var(--pass-bg); color: var(--pass); }
+    .badge.fail { background: var(--fail-bg); color: var(--fail); }
+    .badge.error { background: var(--warn-bg); color: var(--warn); }
+
+    .problems { margin: 0 0 20px; padding: 14px 18px 14px 34px; background: var(--fail-bg); border-radius: var(--r-md); }
+    .problems.error { background: var(--warn-bg); }
+    .problems li { margin: 2px 0; }
+    .problems li b { font-weight: 600; }
+    .exchange { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; }
+    .leg { border: 1px solid var(--rule); border-radius: var(--r-md); overflow: hidden; }
+    .leg h3 { font-size: var(--t-md); padding: 10px 14px; background: var(--bench); display: flex; justify-content: space-between; gap: 8px; }
+    .leg h3 span { font-weight: 500; color: var(--graphite); font-size: var(--t-sm); }
+    .leg h4 { font-size: var(--t-xs); font-weight: 600; color: var(--graphite); margin: 12px 14px 4px; }
+    .leg .none { padding: 12px 14px; margin: 0; color: var(--graphite); font-size: var(--t-sm); }
+    .kv { width: 100%; border-collapse: collapse; font-family: var(--mono); font-size: var(--t-xs); }
+    .kv td { padding: 5px 14px; vertical-align: top; border-top: 1px solid var(--rule-soft); overflow-wrap: anywhere; }
+    .kv td:first-child { color: var(--graphite); width: 1%; white-space: nowrap; word-break: normal; }
+    .kv + h4 { margin-top: 16px; }
+
+    @media (max-width: 860px) {
+      .layout { grid-template-columns: 1fr; height: auto; }
+      .inputs { border-right: 0; border-bottom: 1px solid var(--rule); }
+      .run { position: static; }
+      .blank { margin-top: 24px; }
+    }
+  </style>
+</head>
+<body>
+<div class="layout">
+  <!-- ================= inputs ================= -->
+  <form class="inputs" id="form" novalidate>
+    <header>
+      <h1>CORS checker</h1>
+      <p>Each URL is checked against every origin, the same way a browser would ask.</p>
+    </header>
+
+    <div class="field">
+      <label for="urls">URLs to check <span class="hint">one per line</span></label>
+      <textarea id="urls" spellcheck="false" placeholder="https://api.example.com/v1/users&#10;https://cdn.example.com/fonts/brand.woff2"></textarea>
+      <p class="line-error" id="urlsError" hidden></p>
+    </div>
+
+    <div class="field">
+      <label for="origins">Calling from these sites <span class="hint">one origin per line</span></label>
+      <textarea id="origins" spellcheck="false" placeholder="https://www.example.com&#10;http://localhost:3000"></textarea>
+      <p class="line-error" id="originsError" hidden></p>
+    </div>
+
+    <div class="pair">
+      <div class="field">
+        <label for="method">Method</label>
+        <select id="method">
+          <option>GET</option><option>POST</option><option>PUT</option>
+          <option>PATCH</option><option>DELETE</option><option>HEAD</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="ctype">Content-Type</label>
+        <input id="ctype" type="text" list="ctypes" placeholder="None" spellcheck="false" />
+        <datalist id="ctypes">
+          <option value="application/json"></option>
+          <option value="application/x-www-form-urlencoded"></option>
+          <option value="multipart/form-data"></option>
+          <option value="text/plain"></option>
+        </datalist>
+      </div>
+    </div>
+
+    <div class="field">
+      <label for="headers">Extra request headers <span class="hint">comma separated</span></label>
+      <input id="headers" type="text" placeholder="Authorization, X-Api-Key" spellcheck="false" />
+    </div>
+
+    <div class="checks">
+      <label class="check"><input type="checkbox" id="creds" /> Send cookies or auth (credentials mode)</label>
+      <label class="check"><input type="checkbox" id="verify" checked /> Verify SSL certificates</label>
+    </div>
+
+    <div class="run">
+      <button class="btn btn-primary" id="runBtn" type="submit" disabled>Check</button>
+      <span class="hint"><kbd>Ctrl</kbd> + <kbd>Enter</kbd> runs the check from any field</span>
+    </div>
+  </form>
+
+  <!-- ================= results ================= -->
+  <section class="results" aria-live="polite">
+    <div id="offline" class="blank" hidden>
+      <h2>This copy can't run checks</h2>
+      <p>The CORS checker sends its requests from the Python server, and this copy is a static site with no server behind it.</p>
+      <p>To run checks, start the app on your machine with <code>run.bat</code>, then open <code>http://localhost:5555</code>. Your URLs and origins here are saved, so you can paste them across.</p>
+    </div>
+    <div id="blank" class="blank">
+      <h2>Nothing checked yet</h2>
+      <p>Paste the URLs on the left and the sites that will call them, then run the check.</p>
+      <p>Results land here as a grid, one row per URL and one column per site. Select a square to see the exact headers that were exchanged.</p>
+    </div>
+
+    <div id="report" hidden>
+      <div class="results-top">
+        <div class="summary" id="summary"></div>
+        <button class="btn" id="copyBtn" type="button">Copy results</button>
+      </div>
+      <div class="grid-wrap"><table class="matrix" id="matrix"></table></div>
+      <div class="detail" id="detail"></div>
+    </div>
+  </section>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const STORE = "cors.inputs";
+const MAX_CHECKS = 200;
+const PARALLEL = 6;
+// The static export (export_static.py) adds <meta name="workbench-mode" content="static">
+const STATIC = !!document.querySelector('meta[name="workbench-mode"][content="static"]');
+if (STATIC) { $("offline").hidden = false; $("blank").hidden = true; }
+
+const fields = ["urls", "origins", "method", "ctype", "headers"];
+let results = new Map();    // "u|o" -> {state, data}
+let selected = null;
+let run = { urls: [], origins: [], id: 0 };
+
+/* ---------- inputs ---------- */
+const lines = (text) => [...new Set(text.split(/\r?\n/).map((s) => s.trim()).filter(Boolean))];
+
+function parseUrls() {
+  const ok = [], bad = [];
+  lines($("urls").value).forEach((l) => {
+    try { const u = new URL(l); if (!/^https?:$/.test(u.protocol)) throw 0; ok.push(u.href); }
+    catch { bad.push(l); }
+  });
+  return { ok, bad };
+}
+
+function parseOrigins() {
+  const ok = [], bad = [];
+  lines($("origins").value).forEach((l) => {
+    if (l === "null") return ok.push("null");
+    try { const u = new URL(l); if (!/^https?:$/.test(u.protocol)) throw 0; ok.includes(u.origin) || ok.push(u.origin); }
+    catch { bad.push(l); }
+  });
+  return { ok, bad };
+}
+
+function showError(id, bad, what) {
+  const el = $(id);
+  el.hidden = !bad.length;
+  if (bad.length) el.textContent = `${bad.length === 1 ? `"${bad[0]}" isn't` : `${bad.length} lines aren't`} a full ${what}. Start with https:// or http://`;
+}
+
+function refreshRunButton() {
+  const u = parseUrls(), o = parseOrigins();
+  showError("urlsError", u.bad, "URL");
+  showError("originsError", o.bad, "origin");
+  const n = u.ok.length * o.ok.length;
+  const btn = $("runBtn");
+  if (STATIC) { btn.disabled = true; btn.textContent = "Checks need the local server"; return; }
+  btn.disabled = n === 0 || n > MAX_CHECKS;
+  btn.textContent = n === 0 ? "Check"
+    : n > MAX_CHECKS ? `Too many checks (${n}), the limit is ${MAX_CHECKS}`
+    : `Check ${u.ok.length} URL${u.ok.length > 1 ? "s" : ""} against ${o.ok.length} site${o.ok.length > 1 ? "s" : ""}`;
+}
+
+function saveInputs() {
+  const data = Object.fromEntries(fields.map((f) => [f, $(f).value]));
+  data.creds = $("creds").checked;
+  data.verify = $("verify").checked;
+  localStorage.setItem(STORE, JSON.stringify(data));
+}
+
+function loadInputs() {
+  try {
+    const d = JSON.parse(localStorage.getItem(STORE)) || {};
+    fields.forEach((f) => { if (d[f] != null) $(f).value = d[f]; });
+    if (d.creds != null) $("creds").checked = d.creds;
+    if (d.verify != null) $("verify").checked = d.verify;
+  } catch {}
+}
+
+$("form").addEventListener("input", () => { refreshRunButton(); saveInputs(); });
+$("form").addEventListener("submit", (e) => { e.preventDefault(); startRun(); });
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && !$("runBtn").disabled) { e.preventDefault(); startRun(); }
+});
+
+/* ---------- running ---------- */
+const key = (u, o) => `${u}|${o}`;
+
+function classify(r) {
+  if (r.problems.some((p) => p.includes("Request failed"))) return "error";
+  return r.allowed ? "pass" : "fail";
+}
+
+async function startRun() {
+  const urls = parseUrls().ok, origins = parseOrigins().ok;
+  if (!urls.length || !origins.length) return;
+  const id = ++run.id;
+  run = { urls, origins, id };
+  results = new Map();
+  selected = null;
+  urls.forEach((u) => origins.forEach((o) => results.set(key(u, o), { state: "pending" })));
+
+  $("blank").hidden = true;
+  $("report").hidden = false;
+  renderMatrix();
+  renderDetail();
+  $("runBtn").disabled = true;
+
+  const body = {
+    method: $("method").value,
+    request_headers: $("headers").value,
+    content_type: $("ctype").value.trim(),
+    credentials: $("creds").checked,
+    verify_ssl: $("verify").checked,
+  };
+  const queue = [...results.keys()];
+
+  async function worker() {
+    while (queue.length && run.id === id) {
+      const k = queue.shift();
+      const [u, o] = k.split(/\|(?=[^|]*$)/);
+      let entry;
+      try {
+        const res = await fetch("../cors/check", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ...body, url: u, origin: o }),
+        });
+        if (!res.ok) throw new Error(`The checker returned HTTP ${res.status}`);
+        const data = await res.json();
+        entry = { state: classify(data), data };
+      } catch (err) {
+        entry = { state: "error", data: { url: u, origin: o, problems: [`Request failed: ${err.message}. Is the Workbench server still running?`] } };
+      }
+      if (run.id !== id) return;
+      results.set(k, entry);
+      updateCell(k);
+      renderSummary();
+    }
+  }
+  await Promise.all(Array.from({ length: PARALLEL }, worker));
+  if (run.id !== id) return;
+
+  refreshRunButton();
+  if (!selected) {
+    const firstBad = [...results.entries()].find(([, v]) => v.state !== "pass");
+    select(firstBad ? firstBad[0] : [...results.keys()][0]);
+  }
+}
+
+/* ---------- rendering ---------- */
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const LABEL = { pending: ["…", "Checking"], pass: ["✓", "Allowed"], fail: ["✕", "Blocked"], error: ["!", "Couldn't reach"] };
+
+function splitUrl(u) {
+  try { const x = new URL(u); return [x.host, x.pathname + x.search]; } catch { return [u, ""]; }
+}
+
+function renderMatrix() {
+  const { urls, origins } = run;
+  const head = origins.map((o) => {
+    const host = o === "null" ? "null" : new URL(o).host;
+    const scheme = o === "null" ? "opaque origin" : new URL(o).protocol.replace(":", "");
+    return `<th scope="col" title="${esc(o)}">${esc(host)}<span>${esc(scheme)}</span></th>`;
+  }).join("");
+  const rows = urls.map((u) => {
+    const [host, path] = splitUrl(u);
+    const cells = origins.map((o) => `<td><button type="button" class="cell" data-key="${esc(key(u, o))}"></button></td>`).join("");
+    return `<tr><th scope="row" title="${esc(u)}"><div class="url-host">${esc(host)}</div><div class="url-path">${esc(path)}</div></th>${cells}</tr>`;
+  }).join("");
+  $("matrix").innerHTML = `<thead><tr><th scope="col">URL<span>${esc($("method").value)} request</span></th>${head}</tr></thead><tbody>${rows}</tbody>`;
+  $("matrix").querySelectorAll(".cell").forEach((b) => {
+    b.onclick = () => select(b.dataset.key);
+    updateCell(b.dataset.key);
+  });
+  renderSummary();
+}
+
+function cellEl(k) {
+  return [...$("matrix").querySelectorAll(".cell")].find((b) => b.dataset.key === k);
+}
+
+function updateCell(k) {
+  const b = cellEl(k);
+  if (!b) return;
+  const r = results.get(k);
+  const [glyph, word] = LABEL[r.state];
+  const status = r.data?.actual?.status;
+  b.dataset.state = r.state;
+  b.setAttribute("aria-pressed", String(selected === k));
+  b.innerHTML = `<span class="glyph" aria-hidden="true">${glyph}</span><span>${word}${status ? `<small>HTTP ${status}</small>` : ""}</span>`;
+  const [u, o] = k.split(/\|(?=[^|]*$)/);
+  b.setAttribute("aria-label", `${word}: ${u} from ${o}`);
+  if (selected === k) renderDetail();
+}
+
+function renderSummary() {
+  const vals = [...results.values()];
+  const n = (s) => vals.filter((v) => v.state === s).length;
+  const pending = n("pending");
+  const parts = [`<span class="n-pass">${n("pass")} allowed</span>`, `<span class="n-fail">${n("fail")} blocked</span>`];
+  if (n("error")) parts.push(`<span class="n-err">${n("error")} unreachable</span>`);
+  $("summary").innerHTML = parts.join(", ") + (pending ? `, ${pending} still checking` : ` out of ${vals.length}`);
+  $("copyBtn").disabled = pending > 0;
+}
+
+function select(k) {
+  const prev = selected;
+  selected = k;
+  if (prev) cellEl(prev)?.setAttribute("aria-pressed", "false");
+  cellEl(k)?.setAttribute("aria-pressed", "true");
+  renderDetail();
+}
+
+function kvTable(obj) {
+  const entries = Object.entries(obj || {});
+  if (!entries.length) return `<p class="none">None</p>`;
+  return `<table class="kv">${entries.map(([k, v]) => `<tr><td>${esc(k)}</td><td>${esc(v)}</td></tr>`).join("")}</table>`;
+}
+
+function legHtml(title, leg, emptyText) {
+  if (!leg) return `<div class="leg"><h3>${title}</h3><p class="none">${emptyText}</p></div>`;
+  return `<div class="leg">
+    <h3>${title}<span>HTTP ${esc(leg.status)}</span></h3>
+    <h4>Sent</h4>${kvTable(leg.sent)}
+    <h4>CORS headers received</h4>${kvTable(leg.headers)}
+  </div>`;
+}
+
+function renderDetail() {
+  const el = $("detail");
+  const r = selected && results.get(selected);
+  if (!r || r.state === "pending") { el.innerHTML = ""; return; }
+  const d = r.data;
+  const [u, o] = selected.split(/\|(?=[^|]*$)/);
+  const [, word] = LABEL[r.state];
+  const problems = (d.problems || []).map((p) => {
+    const m = p.match(/^\[(preflight|actual)\]\s*(.*)$/);
+    return m ? `<li><b>${m[1] === "preflight" ? "Preflight" : "Request"}:</b> ${esc(m[2])}</li>` : `<li>${esc(p)}</li>`;
+  }).join("");
+  const preflightNote = d.preflight_required === false
+    ? "Not needed. This is a simple request, so the browser sends it directly."
+    : "The preflight was not sent or did not complete.";
+
+  el.innerHTML = `
+    <div class="detail-head">
+      <span class="badge ${r.state}">${word}</span>
+      <div>
+        <h2>${esc(splitUrl(u).join(""))}</h2>
+        <p>Called from ${esc(o)} with ${esc(d.method || $("method").value)}${d.preflight_required ? ", needs a preflight" : ""}</p>
+      </div>
+    </div>
+    ${problems ? `<ul class="problems ${r.state}">${problems}</ul>` : ""}
+    <div class="exchange">
+      ${legHtml("Preflight (OPTIONS)", d.preflight, preflightNote)}
+      ${legHtml(`Request (${esc(d.method || "")})`, d.actual, "The request did not complete.")}
+    </div>`;
+}
+
+$("copyBtn").addEventListener("click", async () => {
+  const rows = [["URL", "Origin", "Result", "HTTP status", "Problems"]];
+  results.forEach((r, k) => {
+    const [u, o] = k.split(/\|(?=[^|]*$)/);
+    rows.push([u, o, LABEL[r.state][1], r.data?.actual?.status ?? "", (r.data?.problems || []).join(" | ")]);
+  });
+  await navigator.clipboard.writeText(rows.map((r) => r.join("\t")).join("\n"));
+  const btn = $("copyBtn");
+  btn.textContent = "Copied results";
+  setTimeout(() => (btn.textContent = "Copy results"), 1600);
+});
+
+loadInputs();
+refreshRunButton();
+</script>
+</body>
+</html>

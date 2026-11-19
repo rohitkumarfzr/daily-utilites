@@ -1,0 +1,371 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Code formatter</title>
+  <meta name="description" content="Format or minify JSON, JavaScript and TypeScript with Prettier. Runs entirely in your browser." />
+  <link rel="stylesheet" href="../static/theme.css" />
+  <style>
+    .bar { display: flex; flex-wrap: wrap; align-items: end; gap: 14px 20px; margin-bottom: 16px; }
+    .bar .field { min-width: 120px; }
+    .bar select, .bar input[type="number"] { width: auto; min-width: 120px; height: 42px; }
+    .bar input[type="number"] {
+      font: inherit; color: var(--ink); background: #fff; border: 1px solid var(--rule);
+      border-radius: var(--r-sm); padding: 9px 11px; width: 90px; min-width: 0;
+    }
+    .opts { display: flex; flex-wrap: wrap; gap: 8px 18px; padding-bottom: 10px; }
+    .opts[hidden], .field[hidden] { display: none; }
+    .actions { display: flex; gap: 8px; margin-left: auto; }
+
+    .sides { display: grid; grid-template-columns: 1fr 1fr; border: 1px solid var(--ink); border-radius: var(--r-md); overflow: hidden; }
+    .side { display: flex; flex-direction: column; min-width: 0; }
+    .side + .side { border-left: 1px solid var(--ink); }
+    .side-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 8px 8px 14px; background: var(--bench); border-bottom: 1px solid var(--rule); min-height: 50px; }
+    .side-head label { font-weight: 600; }
+    .side-head .meta { color: var(--graphite); font-size: var(--t-xs); margin-left: 10px; font-weight: 400; }
+    .side textarea {
+      border: 0; border-radius: 0; flex: 1; padding: 14px; resize: none;
+      height: calc(100vh - 290px); min-height: 320px;
+      white-space: pre; overflow: auto; tab-size: 4;
+    }
+    .side textarea:focus-visible { outline: 2px solid var(--cobalt); outline-offset: -2px; }
+    #output { background: #f6f8fa; }
+
+    .problem { margin-top: 12px; border: 1px solid var(--fail); border-radius: var(--r-md); background: var(--fail-bg); color: var(--fail); padding: 12px 14px; }
+    .problem[hidden] { display: none; }
+    .problem-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; font-weight: 600; }
+    .problem pre { margin: 10px 0 0; font-family: var(--mono); font-size: var(--t-xs); color: var(--ink); white-space: pre; overflow-x: auto; }
+    .status { min-height: 1.5em; margin: 8px 2px 0; font-size: var(--t-sm); color: var(--graphite); }
+
+    @media (max-width: 860px) {
+      .sides { grid-template-columns: 1fr; }
+      .side + .side { border-left: 0; border-top: 1px solid var(--ink); }
+      .side textarea { height: 40vh; }
+      .actions { margin-left: 0; }
+    }
+  </style>
+</head>
+<body>
+<main class="tool">
+  <header class="tool-head">
+    <h1>Code formatter</h1>
+    <p>Paste JSON, JavaScript or TypeScript on the left. The formatted result appears on the right as you type. Nothing leaves your browser.</p>
+  </header>
+
+  <div class="bar">
+    <div class="field">
+      <label for="lang">Language</label>
+      <select id="lang">
+        <option value="auto">Detect automatically</option>
+        <option value="json">JSON</option>
+        <option value="babel">JavaScript</option>
+        <option value="typescript">TypeScript</option>
+      </select>
+    </div>
+    <div class="field">
+      <label for="indent">Indent</label>
+      <select id="indent">
+        <option value="2">2 spaces</option>
+        <option value="4">4 spaces</option>
+        <option value="tab">Tabs</option>
+      </select>
+    </div>
+    <div class="field" id="widthField">
+      <label for="width">Line width</label>
+      <input type="number" id="width" min="20" max="400" value="80" />
+    </div>
+    <div class="opts" id="jsOpts">
+      <label class="check"><input type="checkbox" id="semi" checked /> Semicolons</label>
+      <label class="check"><input type="checkbox" id="single" /> Single quotes</label>
+      <label class="check"><input type="checkbox" id="trailing" checked /> Trailing commas</label>
+    </div>
+    <div class="opts" id="jsonOpts">
+      <label class="check"><input type="checkbox" id="sort" /> Sort keys</label>
+    </div>
+    <div class="actions">
+      <button class="btn" type="button" id="minify" title="JSON only">Minify JSON</button>
+      <button class="btn btn-primary" type="button" id="format">Format <kbd>Ctrl Enter</kbd></button>
+    </div>
+  </div>
+
+  <div class="sides">
+    <div class="side">
+      <div class="side-head">
+        <label for="input">Input <span class="meta" id="inMeta"></span></label>
+        <button class="btn btn-quiet" type="button" id="clear">Clear</button>
+      </div>
+      <textarea id="input" spellcheck="false" placeholder='{"name":"workbench","tools":["cors","url"],"port":5555}'></textarea>
+    </div>
+    <div class="side">
+      <div class="side-head">
+        <label for="output">Formatted <span class="meta" id="outMeta"></span></label>
+        <span>
+          <button class="btn btn-quiet" type="button" id="useOutput" title="Move the result into the input">Use as input</button>
+          <button class="btn btn-quiet" type="button" id="copy">Copy</button>
+        </span>
+      </div>
+      <textarea id="output" spellcheck="false" readonly></textarea>
+    </div>
+  </div>
+
+  <section class="problem" id="problem" role="alert" hidden>
+    <div class="problem-head">
+      <span id="problemMsg"></span>
+      <button class="btn" type="button" id="jump" hidden>Show in input</button>
+    </div>
+    <pre id="problemFrame"></pre>
+  </section>
+  <p class="status" id="status" role="status"></p>
+</main>
+
+<script src="../static/vendor/prettier/standalone.js"></script>
+<script src="../static/vendor/prettier/babel.js"></script>
+<script src="../static/vendor/prettier/estree.js"></script>
+<script>
+const $ = (id) => document.getElementById(id);
+const input = $("input"), output = $("output");
+const STORE = "formatter.state";
+const LANG_NAMES = { json: "JSON", babel: "JavaScript", typescript: "TypeScript" };
+const optionIds = ["lang", "indent", "width", "semi", "single", "trailing", "sort"];
+
+/* ---------- TypeScript parser is large: load it only when needed ---------- */
+let tsLoading = null;
+function loadTypeScript() {
+  if (window.prettierPlugins?.typescript) return Promise.resolve();
+  return (tsLoading ??= new Promise((resolve, reject) => {
+    const s = document.createElement("script");
+    s.src = "../static/vendor/prettier/typescript.js";
+    s.onload = resolve;
+    s.onerror = () => reject(new Error("Couldn't load the TypeScript parser from /static/vendor/prettier/typescript.js."));
+    document.head.appendChild(s);
+  }));
+}
+const plugins = () => Object.values(window.prettierPlugins);
+
+/* ---------- options ---------- */
+function prettierOptions(parser) {
+  const indent = $("indent").value;
+  return {
+    parser,
+    plugins: plugins(),
+    printWidth: Math.min(400, Math.max(20, +$("width").value || 80)),
+    tabWidth: indent === "tab" ? 4 : +indent,
+    useTabs: indent === "tab",
+    semi: $("semi").checked,
+    singleQuote: $("single").checked,
+    trailingComma: $("trailing").checked ? "all" : "none",
+  };
+}
+
+function detect(text) {
+  const t = text.trim();
+  if (/^[\[{]/.test(t)) {
+    try { JSON.parse(t); return "json"; } catch {}
+  }
+  if (/\b(interface|type)\s+\w+\s*[={<]|:\s*(string|number|boolean|any|unknown|void)\b|\bas\s+const\b|\b(public|private|readonly)\s+\w+|<\w+>\(/.test(t)) {
+    return "typescript";
+  }
+  return "babel";
+}
+
+/* ---------- JSON helpers (no JSON.parse round trip, so big numbers stay exact) ---------- */
+function minifyJson(text) {
+  JSON.parse(text); // validate first so the user gets a clear error
+  let out = "", inStr = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (inStr) {
+      out += c;
+      if (c === "\\") out += text[++i];
+      else if (c === '"') inStr = false;
+    } else if (c === '"') { inStr = true; out += c; }
+    else if (!/\s/.test(c)) out += c;
+  }
+  return out;
+}
+
+function prettyJson(text, unit) {
+  const min = minifyJson(text);
+  let out = "", depth = 0, inStr = false;
+  const nl = () => "\n" + unit.repeat(depth);
+  for (let i = 0; i < min.length; i++) {
+    const c = min[i];
+    if (inStr) {
+      out += c;
+      if (c === "\\") out += min[++i];
+      else if (c === '"') inStr = false;
+      continue;
+    }
+    if (c === '"') { inStr = true; out += c; }
+    else if (c === "{" || c === "[") {
+      const close = c === "{" ? "}" : "]";
+      if (min[i + 1] === close) { out += c + close; i++; }
+      else { depth++; out += c + nl(); }
+    }
+    else if (c === "}" || c === "]") { depth--; out += nl() + c; }
+    else if (c === ",") out += "," + nl();
+    else if (c === ":") out += ": ";
+    else out += c;
+  }
+  return out + "\n";
+}
+
+function sortKeys(v) {
+  if (Array.isArray(v)) return v.map(sortKeys);
+  if (v && typeof v === "object") {
+    return Object.fromEntries(Object.keys(v).sort((a, b) => a.localeCompare(b)).map((k) => [k, sortKeys(v[k])]));
+  }
+  return v;
+}
+
+/* ---------- run ---------- */
+let runId = 0, errorPos = null;
+
+function showProblem(err, lang) {
+  const loc = err.loc?.start;
+  const firstLine = String(err.message).split("\n")[0].replace(/\s*\(\d+:\d+\)\s*$/, "").replace(/\s+at position \d+.*$/, "").replace(/\s*\(line \d+ column \d+\)$/, "");
+  $("problemMsg").textContent = loc
+    ? `This isn't valid ${LANG_NAMES[lang]}: ${firstLine}. Line ${loc.line}, column ${loc.column}.`
+    : `This isn't valid ${LANG_NAMES[lang]}: ${firstLine}.`;
+  $("problemFrame").textContent = err.codeFrame || "";
+  $("problemFrame").hidden = !err.codeFrame;
+  errorPos = loc || null;
+  $("jump").hidden = !loc;
+  $("problem").hidden = false;
+}
+
+function clearProblem() {
+  $("problem").hidden = true;
+  errorPos = null;
+}
+
+function jsonErrorLoc(err, text) {
+  // Chrome: "... at position 42 (line 3 column 5)"
+  const m = /line (\d+) column (\d+)/.exec(err.message);
+  if (m) return { line: +m[1], column: +m[2] };
+  const p = /position (\d+)/.exec(err.message);
+  if (!p) return null;
+  const before = text.slice(0, +p[1]).split("\n");
+  return { line: before.length, column: before.at(-1).length + 1 };
+}
+
+async function run({ minify = false } = {}) {
+  const id = ++runId;
+  const text = input.value;
+  save();
+  $("inMeta").textContent = text ? lineCount(text) : "";
+
+  if (!text.trim()) {
+    output.value = ""; $("outMeta").textContent = ""; clearProblem(); setStatus("");
+    return;
+  }
+
+  let lang = $("lang").value === "auto" ? detect(text) : $("lang").value;
+  syncOptionGroups(lang);
+  const started = performance.now();
+
+  try {
+    if (lang === "typescript") await loadTypeScript();
+    let result;
+    if (lang === "json") {
+      const source = $("sort").checked ? JSON.stringify(sortKeys(JSON.parse(text))) : text;
+      const ind = $("indent").value;
+      result = minify ? minifyJson(source) : prettyJson(source, ind === "tab" ? "\t" : " ".repeat(+ind));
+    } else {
+      result = await prettier.format(text, prettierOptions(lang));
+    }
+    if (id !== runId) return;
+    output.value = result;
+    $("outMeta").textContent = `${LANG_NAMES[lang]}, ${lineCount(result)}`;
+    clearProblem();
+    const ms = Math.round(performance.now() - started);
+    setStatus(`${minify ? "Minified" : "Formatted"} as ${LANG_NAMES[lang]} in ${ms} ms.${lang === "json" && $("sort").checked ? " Keys sorted; numbers beyond 15 significant digits may lose precision." : ""}`);
+  } catch (err) {
+    if (id !== runId) return;
+    if (err instanceof SyntaxError && !err.loc && lang === "json") err.loc = { start: jsonErrorLoc(err, text) };
+    if (err.loc && !err.loc.start) delete err.loc;
+    showProblem(err, lang);
+    $("outMeta").textContent = "out of date";
+    setStatus("");
+  }
+}
+
+function lineCount(t) {
+  const n = t.replace(/\n$/, "").split("\n").length;
+  return `${n} line${n === 1 ? "" : "s"}`;
+}
+
+function setStatus(t) { $("status").textContent = t; }
+
+function syncOptionGroups(lang) {
+  const isJson = lang === "json";
+  $("jsOpts").hidden = isJson;
+  $("jsonOpts").hidden = !isJson;
+  $("widthField").hidden = isJson;
+  $("minify").disabled = !isJson;
+}
+
+/* ---------- persistence ---------- */
+function save() {
+  const state = { input: input.value };
+  optionIds.forEach((k) => (state[k] = $(k).type === "checkbox" ? $(k).checked : $(k).value));
+  try { localStorage.setItem(STORE, JSON.stringify(state)); } catch {}
+}
+function restore() {
+  const s = JSON.parse(localStorage.getItem(STORE) || "{}");
+  optionIds.forEach((k) => {
+    if (!(k in s)) return;
+    if ($(k).type === "checkbox") $(k).checked = s[k]; else $(k).value = s[k];
+  });
+  input.value = s.input || "";
+}
+
+/* ---------- events ---------- */
+let timer;
+const runSoon = () => { clearTimeout(timer); timer = setTimeout(run, 250); };
+
+input.addEventListener("input", runSoon);
+optionIds.forEach((k) => $(k).addEventListener("change", () => run()));
+$("width").addEventListener("input", runSoon);
+$("format").onclick = () => run();
+$("minify").onclick = () => run({ minify: true });
+
+document.addEventListener("keydown", (e) => {
+  if ((e.ctrlKey || e.metaKey) && e.key === "Enter") { e.preventDefault(); run(); }
+});
+
+// Tab key indents inside the input instead of leaving it
+input.addEventListener("keydown", (e) => {
+  if (e.key !== "Tab" || e.ctrlKey || e.altKey || e.metaKey) return;
+  e.preventDefault();
+  document.execCommand("insertText", false, $("indent").value === "tab" ? "\t" : " ".repeat(+$("indent").value));
+});
+
+$("clear").onclick = () => { input.value = ""; run(); input.focus(); };
+$("useOutput").onclick = () => { if (output.value) { input.value = output.value; run(); input.focus(); } };
+$("copy").onclick = async () => {
+  if (!output.value) return;
+  await navigator.clipboard.writeText(output.value);
+  $("copy").textContent = "Copied";
+  setTimeout(() => ($("copy").textContent = "Copy"), 1400);
+};
+
+$("jump").onclick = () => {
+  if (!errorPos) return;
+  const lines = input.value.split("\n");
+  let offset = 0;
+  for (let i = 0; i < errorPos.line - 1 && i < lines.length; i++) offset += lines[i].length + 1;
+  offset += Math.max(0, (errorPos.column || 1) - 1);
+  input.focus();
+  input.setSelectionRange(offset, Math.min(offset + 1, input.value.length));
+  const lh = parseFloat(getComputedStyle(input).lineHeight) || 22;
+  input.scrollTop = Math.max(0, (errorPos.line - 4) * lh);
+};
+
+restore();
+syncOptionGroups($("lang").value === "auto" ? detect(input.value) : $("lang").value);
+run();
+</script>
+</body>
+</html>

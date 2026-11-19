@@ -1,0 +1,29 @@
+# Python
+venv/
+.venv/
+__pycache__/
+*.pyc
+
+# Secrets and local config
+.env
+token.json
+*.pem
+
+# Local-only scripts and data
+run.py
+main.py
+client.py
+Untitled-*.json
+templates/Untitled-*.json
+downloads/
+package-lock.json
+*.png
+dist/
+
+# Claude Code local notes
+CLAUDE.local.md
+
+# Docs live in the private workspace repo
+SPEC.md
+HANDOFF.md
+CLAUDE.md

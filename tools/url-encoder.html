@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>URL encoder</title>
+  <meta name="description" content="Percent-encode or decode text and URLs. Type on either side and the other side updates." />
+  <link rel="stylesheet" href="../static/theme.css" />
+  <style>
+    .modes { display: flex; gap: 20px; flex-wrap: wrap; margin-bottom: 18px; }
+    .modes .check { font-weight: 500; }
+
+    .sides { display: grid; grid-template-columns: 1fr 1fr; gap: 0; border: 1px solid var(--ink); border-radius: var(--r-md); overflow: hidden; }
+    .side { display: flex; flex-direction: column; min-width: 0; }
+    .side + .side { border-left: 1px solid var(--ink); }
+    .side-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 8px 8px 14px; background: var(--bench); border-bottom: 1px solid var(--rule); }
+    .side-head label { font-weight: 600; }
+    .side textarea { border: 0; border-radius: 0; min-height: 300px; flex: 1; padding: 14px; resize: vertical; }
+    .side textarea:focus-visible { outline: 2px solid var(--cobalt); outline-offset: -2px; }
+    .status { min-height: 1.5em; margin: 8px 2px 0; font-size: var(--t-sm); color: var(--graphite); }
+    .status.bad { color: var(--fail); }
+
+    .recent { margin-top: 32px; max-width: 100%; }
+    .recent h2 { font-size: var(--t-lg); margin-bottom: 8px; }
+    .recent ul { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--rule); }
+    .recent li button {
+      width: 100%; text-align: left; font: inherit; background: none; border: 0;
+      border-bottom: 1px solid var(--rule); padding: 10px 4px; cursor: pointer;
+      font-family: var(--mono); font-size: var(--t-sm);
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .recent li button:hover { background: var(--bench); }
+    .recent .none { color: var(--graphite); font-size: var(--t-sm); }
+
+    @media (max-width: 760px) {
+      .sides { grid-template-columns: 1fr; }
+      .side + .side { border-left: 0; border-top: 1px solid var(--ink); }
+    }
+  </style>
+</head>
+<body>
+<main class="tool">
+  <header class="tool-head">
+    <h1>URL encoder</h1>
+    <p>Type plain text on the left to encode it, or paste encoded text on the right to decode it.</p>
+  </header>
+
+  <fieldset class="modes" style="border:0;padding:0">
+    <legend class="sr-only">What are you encoding?</legend>
+    <label class="check"><input type="radio" name="mode" value="component" checked /> A query value or path segment (encodes / ? & =)</label>
+    <label class="check"><input type="radio" name="mode" value="full" /> A whole URL (keeps / ? & =)</label>
+  </fieldset>
+
+  <div class="sides">
+    <div class="side">
+      <div class="side-head">
+        <label for="plain">Plain text</label>
+        <button class="btn btn-quiet" type="button" data-copy="plain">Copy</button>
+      </div>
+      <textarea id="plain" spellcheck="false" placeholder="https://example.com/search?q=hello world&lang=en"></textarea>
+    </div>
+    <div class="side">
+      <div class="side-head">
+        <label for="encoded">Encoded</label>
+        <button class="btn btn-quiet" type="button" data-copy="encoded">Copy</button>
+      </div>
+      <textarea id="encoded" spellcheck="false" placeholder="https%3A%2F%2Fexample.com%2Fsearch%3Fq%3Dhello%20world"></textarea>
+    </div>
+  </div>
+  <p class="status" id="status" role="status"></p>
+
+  <section class="recent">
+    <h2>Copied recently</h2>
+    <ul id="recent"></ul>
+  </section>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const plain = $("plain"), encoded = $("encoded"), status = $("status");
+const RECENT_KEY = "urlenc.recent";
+let recent = JSON.parse(localStorage.getItem(RECENT_KEY) || "[]");
+
+const mode = () => document.querySelector('input[name="mode"]:checked').value;
+const enc = (s) => (mode() === "full" ? encodeURI(s) : encodeURIComponent(s));
+const dec = (s) => (mode() === "full" ? decodeURI(s) : decodeURIComponent(s));
+
+function setStatus(text, bad = false) {
+  status.textContent = text;
+  status.classList.toggle("bad", bad);
+}
+
+function fromPlain() {
+  encoded.value = enc(plain.value);
+  setStatus(plain.value ? `Encoded ${plain.value.length} characters into ${encoded.value.length}.` : "");
+}
+
+function fromEncoded() {
+  try {
+    plain.value = dec(encoded.value.replace(/\+/g, "%20"));
+    const note = encoded.value.includes("+") ? " Each + was read as a space." : "";
+    setStatus(encoded.value ? `Decoded.${note}` : "");
+  } catch {
+    setStatus("This isn't valid percent-encoding. Check for a lone % or a cut-off sequence like %E2%82.", true);
+  }
+}
+
+plain.addEventListener("input", fromPlain);
+encoded.addEventListener("input", fromEncoded);
+document.querySelectorAll('input[name="mode"]').forEach((r) => r.addEventListener("change", fromPlain));
+
+document.querySelectorAll("[data-copy]").forEach((btn) => {
+  btn.addEventListener("click", async () => {
+    const value = $(btn.dataset.copy).value;
+    if (!value) return;
+    await navigator.clipboard.writeText(value);
+    btn.textContent = "Copied";
+    setTimeout(() => (btn.textContent = "Copy"), 1400);
+    recent = [{ plain: plain.value, mode: mode() }, ...recent.filter((r) => r.plain !== plain.value)].slice(0, 10);
+    localStorage.setItem(RECENT_KEY, JSON.stringify(recent));
+    renderRecent();
+  });
+});
+
+function renderRecent() {
+  const ul = $("recent");
+  ul.innerHTML = recent.length ? "" : `<li class="none">Anything you copy shows up here so you can bring it back.</li>`;
+  recent.forEach((r) => {
+    const li = document.createElement("li");
+    const b = document.createElement("button");
+    b.type = "button";
+    b.textContent = r.plain;
+    b.title = r.plain;
+    b.onclick = () => {
+      document.querySelector(`input[name="mode"][value="${r.mode}"]`).checked = true;
+      plain.value = r.plain;
+      fromPlain();
+      plain.focus();
+    };
+    li.appendChild(b);
+    ul.appendChild(li);
+  });
+}
+
+renderRecent();
+</script>
+</body>
+</html>
