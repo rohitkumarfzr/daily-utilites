@@ -48,10 +48,39 @@
     .blank p { color: var(--graphite); margin: 0 0 8px; }
     .blank .lock { font-size: var(--t-2xl); line-height: 1; margin-bottom: 14px; color: var(--graphite); }
 
-    .loading .spinner { width: 22px; height: 22px; margin-bottom: 14px; border: 2px solid var(--rule); border-top-color: var(--ink); border-radius: 50%; animation: spin 0.9s linear infinite; }
+    /* centred loader with live counters */
+    .loading { display: flex; flex-direction: column; align-items: center; text-align: center; margin: 8vh auto 28px; max-width: 64ch; }
+    .loading[hidden] { display: none; }
+    .loading h2 { font-size: var(--t-xl); letter-spacing: -0.01em; margin-bottom: 6px; }
+    .loading p { color: var(--graphite); margin: 0 0 4px; }
     .loading code { word-break: break-all; }
+    .spinner { width: 44px; height: 44px; margin-bottom: 18px; border: 3px solid var(--rule); border-top-color: var(--ink); border-radius: 50%; animation: spin 0.9s linear infinite; }
     @keyframes spin { to { transform: rotate(360deg); } }
-    @media (prefers-reduced-motion: reduce) { .loading .spinner { animation: none; border-top-color: var(--graphite); } }
+    .stats { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px 28px; margin: 18px 0 10px; }
+    .stat { display: grid; gap: 2px; }
+    .stat b { font-family: var(--mono); font-size: var(--t-lg); font-weight: 600; font-variant-numeric: tabular-nums; }
+    .stat span { font-size: var(--t-xs); color: var(--graphite); }
+    .current { font-family: var(--mono); font-size: var(--t-xs); color: var(--graphite); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin: 0 0 16px; }
+    @media (prefers-reduced-motion: reduce) { .spinner { animation: none; border-top-color: var(--graphite); } }
+
+    /* full log */
+    .log { margin-top: 24px; border: 1px solid var(--rule); border-radius: var(--r-md); background: var(--sheet); }
+    .log[hidden] { display: none; }
+    .log > summary { display: flex; align-items: center; gap: 12px; padding: 8px 14px; background: var(--bench); border-radius: var(--r-md); }
+    .log[open] > summary { border-bottom: 1px solid var(--rule); border-radius: var(--r-md) var(--r-md) 0 0; margin: 0; }
+    .log > summary .grow { flex: 1; }
+    .log > summary .hint { font-weight: 400; margin-left: 6px; }
+    .log-lines { max-height: 46vh; overflow: auto; padding: 8px 0; font-family: var(--mono); font-size: var(--t-xs); line-height: 1.55; }
+    .log-line { display: grid; grid-template-columns: 7ch 7ch 1fr; gap: 10px; padding: 1px 14px; }
+    .log-line .t { color: var(--graphite); text-align: right; font-variant-numeric: tabular-nums; }
+    .log-line .lvl { color: var(--graphite); white-space: nowrap; }
+    .log-line .m { word-break: break-all; white-space: pre-wrap; }
+    .log-line.detail .m { color: var(--graphite); }
+    .log-line.warn { background: var(--warn-bg); }
+    .log-line.warn .lvl, .log-line.warn .m { color: var(--warn); }
+    .log-line.error { background: var(--fail-bg); }
+    .log-line.error .lvl, .log-line.error .m { color: var(--fail); }
+    .log-line.match .lvl, .log-line.match .m { color: var(--pass); }
 
     .alert { display: flex; gap: 10px; padding: 12px 16px; border-radius: var(--r-md); background: var(--fail-bg); color: var(--fail); margin-bottom: 16px; }
     .alert[hidden] { display: none; }
@@ -183,11 +212,19 @@
       <p>Wildcards: <code>*</code> matches any text and <code>?</code> one character, so <code>*.pdf</code> finds every PDF. Add a folder to search less of the bucket.</p>
     </div>
 
-    <div id="loading" class="blank loading" hidden>
+    <div id="loading" class="loading" hidden>
       <div class="spinner" aria-hidden="true"></div>
       <h2 role="status">Searching…</h2>
       <p id="loadingWhat"></p>
-      <p>Every object under the folder is listed, so large buckets can take a while.</p>
+      <div class="stats">
+        <div class="stat"><b id="stScanned">0</b><span>objects scanned</span></div>
+        <div class="stat"><b id="stMatched">0</b><span>matches</span></div>
+        <div class="stat"><b id="stPages">0</b><span>pages</span></div>
+        <div class="stat"><b id="stRate">–</b><span>objects per second</span></div>
+        <div class="stat"><b id="stElapsed">0.0s</b><span>elapsed</span></div>
+      </div>
+      <p class="current" id="stCurrent">Connecting to AWS…</p>
+      <button class="btn" id="stopBtn" type="button">Stop search</button>
     </div>
 
     <div id="alert" class="alert" role="alert" hidden></div>
@@ -205,6 +242,14 @@
         </table>
       </div>
     </div>
+
+    <details class="log" id="logPanel" open hidden>
+      <summary>
+        <span class="grow">Log<span class="hint" id="logCount"></span></span>
+        <button class="btn btn-quiet" id="copyLogBtn" type="button">Copy log</button>
+      </summary>
+      <div class="log-lines" id="logLines" role="log" aria-label="Search log"></div>
+    </details>
   </section>
 </div>
 
@@ -302,6 +347,65 @@ function validate() {
   return null;
 }
 
+/* ---------- live log ---------- */
+let logEntries = [];
+let pending = [];
+let flushQueued = false;
+let clock = null;
+let runStart = 0;
+let controller = null;
+const LEVEL_WORD = { info: "", detail: "", warn: "! warn", error: "✕ error", match: "✓ match" };
+
+function addLog(level, msg, t = (performance.now() - runStart) / 1000) {
+  const entry = { t, level, msg };
+  logEntries.push(entry);
+  pending.push(entry);
+  if (!flushQueued) { flushQueued = true; requestAnimationFrame(flushLog); }
+}
+
+function flushLog() {
+  flushQueued = false;
+  const box = $("logLines");
+  const stick = box.scrollHeight - box.scrollTop - box.clientHeight < 40;
+  const frag = document.createDocumentFragment();
+  for (const e of pending) {
+    const line = document.createElement("div");
+    line.className = `log-line ${e.level}`;
+    line.append(
+      Object.assign(document.createElement("span"), { className: "t", textContent: `${e.t.toFixed(2)}s` }),
+      Object.assign(document.createElement("span"), { className: "lvl", textContent: LEVEL_WORD[e.level] || "" }),
+      Object.assign(document.createElement("span"), { className: "m", textContent: e.msg }),
+    );
+    frag.append(line);
+  }
+  pending = [];
+  box.append(frag);
+  if (stick) box.scrollTop = box.scrollHeight;
+  $("logCount").textContent = `${logEntries.length.toLocaleString()} ${logEntries.length === 1 ? "line" : "lines"}`;
+}
+
+function resetLog() {
+  logEntries = [];
+  pending = [];
+  $("logLines").replaceChildren();
+  $("logCount").textContent = "";
+  $("logPanel").hidden = false;
+  $("logPanel").open = true;
+}
+
+function logText() {
+  return logEntries.map((e) => `${e.t.toFixed(3).padStart(9)}s  ${(LEVEL_WORD[e.level] || e.level).padEnd(9)} ${e.msg}`).join("\n");
+}
+
+function setStats(p) {
+  if (p.scanned != null) $("stScanned").textContent = p.scanned.toLocaleString();
+  if (p.matched != null) $("stMatched").textContent = p.matched.toLocaleString();
+  if (p.pages != null) $("stPages").textContent = p.pages.toLocaleString();
+  if (p.rate != null) $("stRate").textContent = p.rate.toLocaleString();
+  if (p.last_key) $("stCurrent").textContent = `Last object listed: ${p.last_key}`;
+}
+
+/* ---------- search ---------- */
 async function search(ev) {
   ev?.preventDefault();
   if (running || $("runBtn").disabled) return;
@@ -310,35 +414,83 @@ async function search(ev) {
   if (problem) return showAlert(problem);
   save();
 
+  const body = {
+    bucket: $("bucket").value.trim(),
+    mode: mode(),
+    pattern: $("pattern").value,
+    prefix: $("prefix").value.trim(),
+    kind: $("kind").value,
+    match: $("match").value,
+    case_sensitive: $("caseSensitive").checked,
+    max_results: Number($("maxResults").value),
+    profile: $("profile").value.trim(),
+    region: $("region").value.trim(),
+  };
+
   running = true;
   $("runBtn").textContent = "Searching…";
   $("runBtn").disabled = true;
   showLoading();
+  controller = new AbortController();
+  const found = [];
+  let done = null;
+  let failed = null;
+  let progress = {};
+  const url = `../plugins/${PLUGIN}/search/stream`;
+  addLog("detail", `POST ${new URL(url, location.href).pathname}`);
+
   try {
-    const res = await fetch(`../plugins/${PLUGIN}/search`, {
+    const res = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        bucket: $("bucket").value.trim(),
-        mode: mode(),
-        pattern: $("pattern").value,
-        prefix: $("prefix").value.trim(),
-        kind: $("kind").value,
-        match: $("match").value,
-        case_sensitive: $("caseSensitive").checked,
-        max_results: Number($("maxResults").value),
-        profile: $("profile").value.trim(),
-        region: $("region").value.trim(),
-      }),
+      body: JSON.stringify(body),
+      signal: controller.signal,
     });
+    addLog("detail", `Server answered HTTP ${res.status}; reading live events`);
     if (res.status === 404) { showNoAccess(); return; }
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error || `The search failed (HTTP ${res.status}).`);
-    lastResult = data;
-    render(data);
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.error || `The search failed (HTTP ${res.status}).`);
+    }
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = "";
+    for (;;) {
+      const { value, done: eof } = await reader.read();
+      buf += decoder.decode(value || new Uint8Array(), { stream: !eof });
+      let nl;
+      while ((nl = buf.indexOf("\n")) >= 0) {
+        const line = buf.slice(0, nl).trim();
+        buf = buf.slice(nl + 1);
+        if (!line) continue;
+        const e = JSON.parse(line);
+        if (e.type === "log") addLog(e.level, e.msg, e.t);
+        else if (e.type === "progress") { progress = e; setStats(e); }
+        else if (e.type === "match") { found.push(e.item); setStats({ matched: found.length }); }
+        else if (e.type === "done") done = e;
+        else if (e.type === "error") failed = e.message;
+      }
+      if (eof) break;
+    }
+    if (failed) throw new Error(failed);
+    if (!done) throw new Error("The server closed the connection before the search finished. Check the server window for errors.");
+    lastResult = done;
+    render(done);
   } catch (e) {
-    showAlert(e.message === "Failed to fetch" ? "Can't reach the app server. Check that it's still running." : e.message);
+    if (e.name === "AbortError") {
+      const seconds = ((performance.now() - runStart) / 1000).toFixed(2);
+      addLog("warn", `Stopped by you after ${seconds}s; showing the ${found.length.toLocaleString()} matches found so far`);
+      lastResult = { results: found, scanned: progress.scanned || 0, seconds, stopped: "cancelled", bucket: body.bucket };
+      render(lastResult);
+    } else {
+      const msg = e.message === "Failed to fetch" ? "Can't reach the app server. Check that it's still running." : e.message;
+      addLog("error", msg);
+      showAlert(msg);
+    }
   } finally {
+    clearInterval(clock);
+    controller = null;
     $("loading").hidden = true;
     running = false;
     $("runBtn").textContent = "Search";
@@ -352,10 +504,18 @@ function showLoading() {
   $("rows").replaceChildren();
   $("report").hidden = true;
   $("blank").hidden = true;
-  const what = $("loadingWhat");
   const code = (t) => Object.assign(document.createElement("code"), { textContent: t });
   const where = $("prefix").value.trim();
-  what.replaceChildren("Looking for ", code($("pattern").value), " in ", code($("bucket").value.trim() + (where ? `/${where}` : "")), ".");
+  $("loadingWhat").replaceChildren("Looking for ", code($("pattern").value), " in ", code($("bucket").value.trim() + (where ? `/${where}` : "")), ".");
+  ["stScanned", "stMatched", "stPages"].forEach((id) => { $(id).textContent = "0"; });
+  $("stRate").textContent = "–";
+  $("stElapsed").textContent = "0.0s";
+  $("stCurrent").textContent = "Connecting to AWS…";
+  $("stopBtn").disabled = false;
+  $("stopBtn").textContent = "Stop search";
+  runStart = performance.now();
+  clock = setInterval(() => { $("stElapsed").textContent = `${((performance.now() - runStart) / 1000).toFixed(1)}s`; }, 100);
+  resetLog();
   $("loading").hidden = false;
 }
 
@@ -387,6 +547,7 @@ function render(data) {
   const note = $("note");
   note.hidden = !data.stopped;
   if (data.stopped === "max_results") note.textContent = `⚠ Showing the first ${n.toLocaleString()} matches. Raise Max results or add a folder to see the rest.`;
+  if (data.stopped === "cancelled") note.textContent = `⚠ You stopped the search after scanning ${data.scanned.toLocaleString()} objects. Showing the matches found so far.`;
   if (data.stopped === "max_scan") note.textContent = `⚠ Stopped after scanning ${data.max_scan.toLocaleString()} objects. Add a folder to search the rest of the bucket.`;
 
   const rows = data.results.map((r) => {
@@ -443,6 +604,14 @@ FIELDS.forEach((f) => $(f).addEventListener("change", save));
 $("caseSensitive").addEventListener("change", save);
 $("form").addEventListener("submit", search);
 $("form").addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) search(e); });
+$("stopBtn").addEventListener("click", () => {
+  if (!controller) return;
+  $("stopBtn").disabled = true;
+  $("stopBtn").textContent = "Stopping…";
+  controller.abort();
+});
+// the button sits in the log's summary, so stop it from toggling the panel
+$("copyLogBtn").addEventListener("click", (e) => { e.preventDefault(); copyText(logText(), $("copyLogBtn")); });
 $("copyBtn").addEventListener("click", () => {
   if (!lastResult) return;
   copyText(lastResult.results.map((r) => `s3://${lastResult.bucket}/${r.key}`).join("\n"), $("copyBtn"));
