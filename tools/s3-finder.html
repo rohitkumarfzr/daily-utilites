@@ -48,6 +48,11 @@
     .blank p { color: var(--graphite); margin: 0 0 8px; }
     .blank .lock { font-size: var(--t-2xl); line-height: 1; margin-bottom: 14px; color: var(--graphite); }
 
+    .loading .spinner { width: 22px; height: 22px; margin-bottom: 14px; border: 2px solid var(--rule); border-top-color: var(--ink); border-radius: 50%; animation: spin 0.9s linear infinite; }
+    .loading code { word-break: break-all; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    @media (prefers-reduced-motion: reduce) { .loading .spinner { animation: none; border-top-color: var(--graphite); } }
+
     .alert { display: flex; gap: 10px; padding: 12px 16px; border-radius: var(--r-md); background: var(--fail-bg); color: var(--fail); margin-bottom: 16px; }
     .alert[hidden] { display: none; }
     .alert b { font-weight: 700; }
@@ -178,6 +183,13 @@
       <p>Wildcards: <code>*</code> matches any text and <code>?</code> one character, so <code>*.pdf</code> finds every PDF. Add a folder to search less of the bucket.</p>
     </div>
 
+    <div id="loading" class="blank loading" hidden>
+      <div class="spinner" aria-hidden="true"></div>
+      <h2 role="status">Searching…</h2>
+      <p id="loadingWhat"></p>
+      <p>Every object under the folder is listed, so large buckets can take a while.</p>
+    </div>
+
     <div id="alert" class="alert" role="alert" hidden></div>
 
     <div id="report" hidden>
@@ -301,6 +313,7 @@ async function search(ev) {
   running = true;
   $("runBtn").textContent = "Searching…";
   $("runBtn").disabled = true;
+  showLoading();
   try {
     const res = await fetch(`../plugins/${PLUGIN}/search`, {
       method: "POST",
@@ -326,10 +339,24 @@ async function search(ev) {
   } catch (e) {
     showAlert(e.message === "Failed to fetch" ? "Can't reach the app server. Check that it's still running." : e.message);
   } finally {
+    $("loading").hidden = true;
     running = false;
     $("runBtn").textContent = "Search";
     $("runBtn").disabled = false;
   }
+}
+
+function showLoading() {
+  // drop the previous results so they can't be mistaken for the new search
+  lastResult = null;
+  $("rows").replaceChildren();
+  $("report").hidden = true;
+  $("blank").hidden = true;
+  const what = $("loadingWhat");
+  const code = (t) => Object.assign(document.createElement("code"), { textContent: t });
+  const where = $("prefix").value.trim();
+  what.replaceChildren("Looking for ", code($("pattern").value), " in ", code($("bucket").value.trim() + (where ? `/${where}` : "")), ".");
+  $("loading").hidden = false;
 }
 
 const sizeText = (n) => {
