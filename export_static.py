@@ -5,6 +5,8 @@
 
 Every tool page is copied as-is. Tools that call the Python server (the CORS
 checker) detect the static build and explain that checks need the local server.
+Tools marked <meta name="workbench-export" content="skip"> (plugin tools) are
+left out of the static build entirely.
 """
 import json
 import os
@@ -40,8 +42,10 @@ def export(out="dist"):
 
     tools = []
     for name in sorted(f for f in os.listdir(TOOLS_DIR) if f.endswith(".html")):
-        html = _copy_page(os.path.join(TOOLS_DIR, name), os.path.join(out, "tools", name))
         meta = _tool_meta(name)
+        if not meta.pop("export"):
+            continue
+        html = _copy_page(os.path.join(TOOLS_DIR, name), os.path.join(out, "tools", name))
         if SERVER_CALL in html:
             meta["description"] += " Needs the local server to run checks."
         tools.append(meta)

@@ -8,9 +8,11 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.requests import Request
 
+import plugins
 from cors_checker import run_cors_check
 
 app = FastAPI()
+plugins.load_plugins(app)
 
 TOOLS_DIR = "tools"
 templates = Jinja2Templates(directory="templates")
@@ -22,10 +24,12 @@ def _tool_meta(filename):
         head = f.read(4000)
     title = re.search(r"<title>(.*?)</title>", head, re.S)
     desc = re.search(r'<meta\s+name="description"\s+content="(.*?)"', head, re.S)
+    skip = re.search(r'<meta\s+name="workbench-export"\s+content="skip"', head)
     return {
         "file": filename,
         "name": title.group(1).strip() if title else filename[:-5].replace("-", " ").title(),
         "description": desc.group(1).strip() if desc else "",
+        "export": not skip,
     }
 
 
@@ -39,6 +43,12 @@ async def home(request: Request):
 def get_tools():
     files = sorted(f for f in os.listdir(TOOLS_DIR) if f.endswith(".html"))
     return JSONResponse([_tool_meta(f) for f in files])
+
+
+@app.get("/plugins/status")
+def plugins_status():
+    """Which optional plugins are loaded; tools use this to show a no-access message."""
+    return JSONResponse(plugins.status())
 
 
 @app.post("/cors/check")

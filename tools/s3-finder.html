@@ -1,0 +1,433 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>S3 finder</title>
+  <meta name="description" content="Find files and folders in an S3 bucket by exact name, wildcard or regex. Needs the S3 plugin." />
+  <!-- plugin tool: left out of the static build -->
+  <meta name="workbench-export" content="skip" />
+  <link rel="stylesheet" href="../static/theme.css" />
+  <style>
+    body { height: 100%; }
+    .layout { display: grid; grid-template-columns: minmax(320px, 400px) 1fr; height: 100vh; }
+
+    /* ---------- left: inputs ---------- */
+    .inputs {
+      background: var(--bench);
+      border-right: 1px solid var(--rule);
+      overflow-y: auto;
+      padding: 24px 24px 32px;
+      display: flex;
+      flex-direction: column;
+      gap: 18px;
+    }
+    .inputs h1 { font-size: var(--t-xl); }
+    .inputs > header p { margin: 6px 0 0; color: var(--graphite); font-size: var(--t-sm); }
+    .inputs input[type="text"] { font-family: var(--mono); font-size: var(--t-sm); }
+    .modes { display: flex; gap: 16px; flex-wrap: wrap; }
+    .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    fieldset { border: 0; margin: 0; padding: 0; display: grid; gap: 8px; }
+    legend { font-weight: 600; font-size: var(--t-sm); padding: 0; margin-bottom: 6px; }
+    details > summary { cursor: pointer; font-weight: 600; font-size: var(--t-sm); }
+    details[open] > summary { margin-bottom: 12px; }
+    .run { display: grid; gap: 8px; position: sticky; bottom: -32px; padding: 12px 0 0; background: var(--bench); }
+    .run .btn { padding: 12px 16px; font-size: var(--t-md); }
+    .run .hint { text-align: center; }
+    .inputs[aria-disabled="true"] { opacity: 0.55; }
+
+    /* ---------- right: results ---------- */
+    .results { overflow: auto; padding: 24px clamp(16px, 3vw, 36px) 40px; min-width: 0; }
+    .results-top { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; flex-wrap: wrap; margin-bottom: 12px; }
+    .summary { font-size: var(--t-lg); font-weight: 600; letter-spacing: -0.01em; }
+    .summary span { font-weight: 400; color: var(--graphite); font-size: var(--t-sm); margin-left: 6px; }
+    .note { margin: 0 0 14px; padding: 10px 14px; border-radius: var(--r-md); background: var(--warn-bg); color: var(--warn); font-size: var(--t-sm); }
+
+    .blank { max-width: 48ch; margin-top: 12vh; }
+    .blank h2 { font-size: var(--t-2xl); letter-spacing: -0.03em; margin-bottom: 12px; }
+    .blank p { color: var(--graphite); margin: 0 0 8px; }
+    .blank .lock { font-size: var(--t-2xl); line-height: 1; margin-bottom: 14px; color: var(--graphite); }
+
+    .alert { display: flex; gap: 10px; padding: 12px 16px; border-radius: var(--r-md); background: var(--fail-bg); color: var(--fail); margin-bottom: 16px; }
+    .alert[hidden] { display: none; }
+    .alert b { font-weight: 700; }
+
+    /* the result table — the one loud element */
+    .table-wrap { border: 1px solid var(--ink); border-radius: var(--r-md); overflow-x: auto; }
+    table.found { border-collapse: collapse; width: 100%; }
+    .found th, .found td { padding: 9px 12px; border-bottom: 1px solid var(--rule); text-align: left; vertical-align: top; }
+    .found tbody tr:last-child td { border-bottom: 0; }
+    .found thead th { font-family: var(--sans); color: var(--ink); font-size: var(--t-sm); font-weight: 600; background: var(--sheet); border-bottom-color: var(--ink); white-space: nowrap; }
+    .found td { font-size: var(--t-sm); }
+    .found .path { font-family: var(--mono); font-size: var(--t-xs); word-break: break-all; }
+    .found .path .dir { color: var(--graphite); }
+    .found .num, .found .when { font-family: var(--mono); font-size: var(--t-xs); white-space: nowrap; color: var(--graphite); }
+    .found .num { text-align: right; }
+    .kind { white-space: nowrap; font-weight: 600; }
+    .kind .glyph { display: inline-block; width: 1.2em; }
+    .row-copy { padding: 2px 8px; font-size: var(--t-xs); }
+
+    @media (max-width: 860px) {
+      .layout { grid-template-columns: 1fr; height: auto; }
+      .inputs { border-right: 0; border-bottom: 1px solid var(--rule); }
+      .run { position: static; }
+      .blank { margin-top: 24px; }
+      .found .when { display: none; }
+    }
+  </style>
+</head>
+<body>
+<div class="layout">
+  <!-- ================= inputs ================= -->
+  <form class="inputs" id="form" novalidate aria-disabled="true">
+    <header>
+      <h1>S3 finder</h1>
+      <p>Lists the bucket and shows every file or folder whose name matches. Nothing is downloaded or changed.</p>
+    </header>
+
+    <div class="field">
+      <label for="bucket">Bucket</label>
+      <input id="bucket" type="text" list="bucketList" placeholder="my-bucket" spellcheck="false" autocomplete="off" />
+      <datalist id="bucketList"></datalist>
+      <span class="hint" id="bucketHint">Type a name, or pick from the list once it loads.</span>
+    </div>
+
+    <fieldset>
+      <legend>Find by</legend>
+      <div class="modes">
+        <label class="check"><input type="radio" name="mode" value="exact" /> Exact name</label>
+        <label class="check"><input type="radio" name="mode" value="glob" checked /> Wildcard</label>
+        <label class="check"><input type="radio" name="mode" value="regex" /> Regex</label>
+      </div>
+    </fieldset>
+
+    <div class="field">
+      <label for="pattern">Name or pattern <span class="hint" id="patternHint"></span></label>
+      <input id="pattern" type="text" spellcheck="false" autocomplete="off" />
+    </div>
+
+    <div class="field">
+      <label for="prefix">Only inside this folder <span class="hint">optional, faster</span></label>
+      <input id="prefix" type="text" placeholder="reports/2026/" spellcheck="false" autocomplete="off" />
+    </div>
+
+    <div class="pair">
+      <div class="field">
+        <label for="kind">Show</label>
+        <select id="kind">
+          <option value="all">Files and folders</option>
+          <option value="file">Files only</option>
+          <option value="folder">Folders only</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="match">Match against</label>
+        <select id="match">
+          <option value="name">Name only</option>
+          <option value="key">Full path</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="pair">
+      <div class="field">
+        <label for="maxResults">Max results</label>
+        <input id="maxResults" type="text" inputmode="numeric" value="200" />
+      </div>
+      <div class="field" style="align-content: end;">
+        <label class="check"><input type="checkbox" id="caseSensitive" /> Match case</label>
+      </div>
+    </div>
+
+    <details>
+      <summary>AWS settings</summary>
+      <div class="pair">
+        <div class="field">
+          <label for="profile">Profile</label>
+          <input id="profile" type="text" placeholder="Default" spellcheck="false" autocomplete="off" />
+        </div>
+        <div class="field">
+          <label for="region">Region</label>
+          <input id="region" type="text" placeholder="From profile" spellcheck="false" autocomplete="off" />
+        </div>
+      </div>
+    </details>
+
+    <div class="run">
+      <button class="btn btn-primary" id="runBtn" type="submit" disabled>Search</button>
+      <span class="hint"><kbd>Ctrl</kbd> + <kbd>Enter</kbd> searches from any field</span>
+    </div>
+  </form>
+
+  <!-- ================= results ================= -->
+  <section class="results" aria-live="polite">
+    <div id="checking" class="blank">
+      <p role="status">Checking access…</p>
+    </div>
+
+    <div id="noaccess" class="blank" hidden>
+      <div class="lock" aria-hidden="true">🔒</div>
+      <h2>You don't have access to this tool</h2>
+      <p>The S3 finder needs a private add-on that isn't installed on this server.</p>
+      <p>If you need it, ask the owner of this app for access.</p>
+    </div>
+
+    <div id="blank" class="blank" hidden>
+      <h2>Nothing searched yet</h2>
+      <p>Enter a bucket and the name you're looking for, then search.</p>
+      <p>Wildcards: <code>*</code> matches any text and <code>?</code> one character, so <code>*.pdf</code> finds every PDF. Add a folder to search less of the bucket.</p>
+    </div>
+
+    <div id="alert" class="alert" role="alert" hidden></div>
+
+    <div id="report" hidden>
+      <div class="results-top">
+        <div class="summary" id="summary" role="status"></div>
+        <button class="btn" id="copyBtn" type="button">Copy paths</button>
+      </div>
+      <p class="note" id="note" hidden></p>
+      <div class="table-wrap">
+        <table class="found">
+          <thead><tr><th>Type</th><th>Path</th><th class="num">Size</th><th class="when">Modified</th><th><span class="sr-only">Copy</span></th></tr></thead>
+          <tbody id="rows"></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const PLUGIN = "s3-find";
+const STORE = "s3find.inputs";
+const FIELDS = ["bucket", "pattern", "prefix", "kind", "match", "maxResults", "profile", "region"];
+const HINTS = {
+  exact: "the whole name, e.g. report.pdf",
+  glob: "* any text, ? one character",
+  regex: "searched anywhere in the name",
+};
+const PLACEHOLDERS = { exact: "report.pdf", glob: "*.pdf", regex: "^invoice_\\d+\\.pdf$" };
+// Static builds carry this tag; plugin tools are never exported, but stay safe if one is opened.
+const STATIC = !!document.querySelector('meta[name="workbench-mode"][content="static"]');
+
+let lastResult = null;
+let running = false;
+
+/* ---------- saved inputs ---------- */
+const mode = () => document.querySelector('input[name="mode"]:checked').value;
+
+function save() {
+  const data = Object.fromEntries(FIELDS.map((f) => [f, $(f).value]));
+  data.mode = mode();
+  data.caseSensitive = $("caseSensitive").checked;
+  localStorage.setItem(STORE, JSON.stringify(data));
+}
+
+function restore() {
+  try {
+    const d = JSON.parse(localStorage.getItem(STORE)) || {};
+    FIELDS.forEach((f) => { if (d[f] != null) $(f).value = d[f]; });
+    if (d.mode) document.querySelector(`input[name="mode"][value="${d.mode}"]`).checked = true;
+    $("caseSensitive").checked = !!d.caseSensitive;
+  } catch { /* ignore bad saved data */ }
+}
+
+function syncMode() {
+  $("patternHint").textContent = HINTS[mode()];
+  $("pattern").placeholder = PLACEHOLDERS[mode()];
+}
+
+/* ---------- access check ---------- */
+async function checkAccess() {
+  if (STATIC) return false;
+  try {
+    const res = await fetch("../plugins/status");
+    if (!res.ok) return false;
+    const data = await res.json();
+    return (data.plugins || []).includes(PLUGIN);
+  } catch {
+    return false;
+  }
+}
+
+function setEnabled(on) {
+  $("form").setAttribute("aria-disabled", on ? "false" : "true");
+  $("form").querySelectorAll("input, select, button").forEach((el) => { el.disabled = !on; });
+}
+
+async function loadBuckets() {
+  const q = new URLSearchParams({ profile: $("profile").value.trim(), region: $("region").value.trim() });
+  try {
+    const res = await fetch(`../plugins/${PLUGIN}/buckets?${q}`);
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    $("bucketList").replaceChildren(...data.buckets.map((b) => Object.assign(document.createElement("option"), { value: b })));
+    $("bucketHint").textContent = `${data.buckets.length.toLocaleString()} buckets available. Start typing to filter.`;
+  } catch (e) {
+    $("bucketHint").textContent = "Couldn't load the bucket list. You can still type a bucket name.";
+  }
+}
+
+/* ---------- search ---------- */
+function showAlert(message) {
+  $("alert").innerHTML = "";
+  const b = document.createElement("b");
+  b.textContent = "✕";
+  const span = document.createElement("span");
+  span.textContent = message;
+  $("alert").append(b, span);
+  $("alert").hidden = false;
+}
+
+function validate() {
+  if (!$("bucket").value.trim()) return "Enter a bucket name.";
+  if (!$("pattern").value) return "Enter a name or pattern to search for.";
+  if (mode() === "regex") {
+    try { new RegExp($("pattern").value); } catch (e) { return `That regex isn't valid: ${e.message}.`; }
+  }
+  const n = Number($("maxResults").value);
+  if (!Number.isInteger(n) || n < 1) return "Max results must be a whole number above 0.";
+  return null;
+}
+
+async function search(ev) {
+  ev?.preventDefault();
+  if (running || $("runBtn").disabled) return;
+  $("alert").hidden = true;
+  const problem = validate();
+  if (problem) return showAlert(problem);
+  save();
+
+  running = true;
+  $("runBtn").textContent = "Searching…";
+  $("runBtn").disabled = true;
+  try {
+    const res = await fetch(`../plugins/${PLUGIN}/search`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        bucket: $("bucket").value.trim(),
+        mode: mode(),
+        pattern: $("pattern").value,
+        prefix: $("prefix").value.trim(),
+        kind: $("kind").value,
+        match: $("match").value,
+        case_sensitive: $("caseSensitive").checked,
+        max_results: Number($("maxResults").value),
+        profile: $("profile").value.trim(),
+        region: $("region").value.trim(),
+      }),
+    });
+    if (res.status === 404) { showNoAccess(); return; }
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || `The search failed (HTTP ${res.status}).`);
+    lastResult = data;
+    render(data);
+  } catch (e) {
+    showAlert(e.message === "Failed to fetch" ? "Can't reach the app server. Check that it's still running." : e.message);
+  } finally {
+    running = false;
+    $("runBtn").textContent = "Search";
+    $("runBtn").disabled = false;
+  }
+}
+
+const sizeText = (n) => {
+  if (n == null) return "";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let i = 0;
+  while (n >= 1024 && i < units.length - 1) { n /= 1024; i++; }
+  return i ? `${n.toFixed(1)} ${units[i]}` : `${n} B`;
+};
+
+function cell(cls, text) {
+  const td = document.createElement("td");
+  if (cls) td.className = cls;
+  if (text != null) td.textContent = text;
+  return td;
+}
+
+function render(data) {
+  $("blank").hidden = true;
+  $("report").hidden = false;
+  const n = data.results.length;
+  const summary = $("summary");
+  summary.textContent = n ? `${n.toLocaleString()} ${n === 1 ? "match" : "matches"}` : "No matches";
+  const meta = document.createElement("span");
+  meta.textContent = `${data.scanned.toLocaleString()} objects scanned in ${data.seconds}s`;
+  summary.append(meta);
+
+  const note = $("note");
+  note.hidden = !data.stopped;
+  if (data.stopped === "max_results") note.textContent = `⚠ Showing the first ${n.toLocaleString()} matches. Raise Max results or add a folder to see the rest.`;
+  if (data.stopped === "max_scan") note.textContent = `⚠ Stopped after scanning ${data.max_scan.toLocaleString()} objects. Add a folder to search the rest of the bucket.`;
+
+  const rows = data.results.map((r) => {
+    const tr = document.createElement("tr");
+    const kind = cell("kind");
+    kind.innerHTML = r.kind === "folder" ? '<span class="glyph" aria-hidden="true">▸</span>Folder' : '<span class="glyph" aria-hidden="true">·</span>File';
+    const path = cell("path");
+    const slash = r.key.replace(/\/$/, "").lastIndexOf("/");
+    const dir = document.createElement("span");
+    dir.className = "dir";
+    dir.textContent = slash >= 0 ? r.key.slice(0, slash + 1) : "";
+    path.append(dir, document.createTextNode(slash >= 0 ? r.key.slice(slash + 1) : r.key));
+    const copy = cell();
+    const btn = Object.assign(document.createElement("button"), { type: "button", className: "btn btn-quiet row-copy", textContent: "Copy" });
+    btn.setAttribute("aria-label", `Copy s3://${data.bucket}/${r.key}`);
+    btn.addEventListener("click", () => copyText(`s3://${data.bucket}/${r.key}`, btn));
+    copy.append(btn);
+    tr.append(kind, path, cell("num", sizeText(r.size)), cell("when", r.modified || ""), copy);
+    return tr;
+  });
+  if (!n) {
+    const tr = document.createElement("tr");
+    const td = cell(null, "Nothing matched. Try a wildcard such as *name*, turn off Match case, or match against the full path.");
+    td.colSpan = 5;
+    tr.append(td);
+    rows.push(tr);
+  }
+  $("rows").replaceChildren(...rows);
+  $("copyBtn").disabled = !n;
+}
+
+async function copyText(text, btn) {
+  await navigator.clipboard.writeText(text);
+  const old = btn.textContent;
+  btn.textContent = "Copied";
+  setTimeout(() => { btn.textContent = old; }, 1200);
+}
+
+function showNoAccess() {
+  $("checking").hidden = true;
+  $("blank").hidden = true;
+  $("report").hidden = true;
+  $("alert").hidden = true;
+  $("noaccess").hidden = false;
+  setEnabled(false);
+}
+
+/* ---------- wiring ---------- */
+restore();
+syncMode();
+setEnabled(false);
+document.querySelectorAll('input[name="mode"]').forEach((r) => r.addEventListener("change", () => { syncMode(); save(); }));
+FIELDS.forEach((f) => $(f).addEventListener("change", save));
+$("caseSensitive").addEventListener("change", save);
+$("form").addEventListener("submit", search);
+$("form").addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) search(e); });
+$("copyBtn").addEventListener("click", () => {
+  if (!lastResult) return;
+  copyText(lastResult.results.map((r) => `s3://${lastResult.bucket}/${r.key}`).join("\n"), $("copyBtn"));
+});
+
+checkAccess().then((ok) => {
+  if (!ok) return showNoAccess();
+  $("checking").hidden = true;
+  $("blank").hidden = false;
+  setEnabled(true);
+  loadBuckets();
+});
+</script>
+</body>
+</html>
