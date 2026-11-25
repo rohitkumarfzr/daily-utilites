@@ -7,7 +7,7 @@
   <meta name="description" content="Find files and folders in an S3 bucket by exact name, wildcard or regex. Needs the S3 plugin." />
   <!-- plugin tool: left out of the static build -->
   <meta name="workbench-export" content="skip" />
-  <link rel="stylesheet" href="../static/theme.css" />
+  <link rel="stylesheet" href="../static/theme.css?v=2" />
   <style>
     body { height: 100%; }
     .layout { display: grid; grid-template-columns: minmax(320px, 400px) 1fr; height: 100vh; }
@@ -35,6 +35,14 @@
     .run .btn { padding: 12px 16px; font-size: var(--t-md); }
     .run .hint { text-align: center; }
     .inputs[aria-disabled="true"] { opacity: 0.55; }
+
+    /* bucket and folder pickers (combobox styles are in theme.css) */
+    .label-row { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+    .label-row label { font-weight: 600; font-size: var(--t-sm); }
+    .reload { padding: 2px 6px; font-size: var(--t-xs); }
+    .label-row .check { font-size: var(--t-xs); gap: 6px; color: var(--graphite); white-space: nowrap; flex: none; }
+    .label-row .check input { width: 14px; height: 14px; }
+    .hint.warn { color: var(--warn); }
 
     /* ---------- right: results ---------- */
     .results { overflow: auto; padding: 24px clamp(16px, 3vw, 36px) 40px; min-width: 0; }
@@ -120,10 +128,13 @@
     </header>
 
     <div class="field">
-      <label for="bucket">Bucket</label>
-      <input id="bucket" type="text" list="bucketList" placeholder="my-bucket" spellcheck="false" autocomplete="off" />
-      <datalist id="bucketList"></datalist>
-      <span class="hint" id="bucketHint">Type a name, or pick from the list once it loads.</span>
+      <div class="label-row">
+        <label for="bucket" id="bucketLabel">Bucket</label>
+        <button class="btn btn-quiet reload" id="reloadBuckets" type="button">Reload list</button>
+      </div>
+      <input id="bucket" type="text" placeholder="Type part of a name, e.g. prod assets"
+             spellcheck="false" autocomplete="off" aria-describedby="bucketHint" />
+      <span class="hint" id="bucketHint" aria-live="polite">Loading your buckets…</span>
     </div>
 
     <fieldset>
@@ -141,8 +152,12 @@
     </div>
 
     <div class="field">
-      <label for="prefix">Only inside this folder <span class="hint">optional, faster</span></label>
-      <input id="prefix" type="text" placeholder="reports/2026/" spellcheck="false" autocomplete="off" />
+      <div class="label-row">
+        <label for="prefix" id="prefixLabel">Only inside this folder</label>
+        <label class="check"><input type="checkbox" id="suggestFolders" /> Suggest folders</label>
+      </div>
+      <input id="prefix" type="text" placeholder="reports/2026/" spellcheck="false" autocomplete="off" aria-describedby="prefixHint" />
+      <span class="hint" id="prefixHint">Optional. Searching one folder is faster than the whole bucket.</span>
     </div>
 
     <div class="pair">
@@ -253,6 +268,7 @@
   </section>
 </div>
 
+<script src="../static/combobox.js?v=2"></script>
 <script>
 const $ = (id) => document.getElementById(id);
 const PLUGIN = "s3-find";
@@ -312,17 +328,155 @@ function setEnabled(on) {
   $("form").querySelectorAll("input, select, button").forEach((el) => { el.disabled = !on; });
 }
 
+/* ---------- bucket and folder pickers (static/combobox.js) ---------- */
+const BUCKET_CACHE = "s3find.buckets";           // {"profile|region": {at, buckets}}
+const BUCKET_RECENT = "s3find.recentBuckets";    // last 5 buckets searched
+const SUGGEST_FOLDERS = "s3find.suggestFolders"; // "1" when folder suggestions are on
+const buckets = { all: [], loaded: false, error: null, note: null, token: 0 };
+const folders = new Map(); // "profile|region|bucket|parent" -> {state, list, truncated, error, at}
+const aws = () => ({ profile: $("profile").value.trim(), region: $("region").value.trim() });
+
+function recentBuckets() {
+  try { return JSON.parse(localStorage.getItem(BUCKET_RECENT)) || []; } catch { return []; }
+}
+
+function rememberBucket(name) {
+  const list = [name, ...recentBuckets().filter((b) => b !== name)].slice(0, 5);
+  localStorage.setItem(BUCKET_RECENT, JSON.stringify(list));
+}
+
+const bucketCombo = new Combobox($("bucket"), {
+  labelledBy: "bucketLabel",
+  source(text) {
+    const q = text.trim();
+    const recent = recentBuckets();
+    const total = buckets.all.length.toLocaleString();
+    const empty = !buckets.loaded ? "Loading your buckets…"
+      : q ? `No bucket in your list matches “${q}”. You can still search it by that name.`
+      : buckets.error ? "The bucket list didn't load. Type a bucket name instead."
+      : "No buckets found for this AWS profile and region.";
+    if (!q) {
+      const rest = buckets.all.filter((b) => !recent.includes(b));
+      const rows = [];
+      if (recent.length) rows.push({ group: "Recently searched" }, ...recent.map((value) => ({ value })));
+      if (rest.length && recent.length) rows.push({ group: "All buckets" });
+      rows.push(...rest.slice(0, 60).map((value) => ({ value })));
+      return { rows, matched: recent.length + rest.length, count: `${total} buckets`, empty };
+    }
+    const res = Combobox.filter(new Set([...recent, ...buckets.all]), q, { boost: (b) => (recent.includes(b) ? 50 : 0) });
+    return { ...res, count: `${res.matched.toLocaleString()} of ${total} buckets match`, empty };
+  },
+});
+
+function bucketHint() {
+  const h = $("bucketHint");
+  const v = $("bucket").value.trim();
+  h.classList.remove("warn");
+  if (!buckets.loaded) h.textContent = "Loading your buckets…";
+  else if (buckets.error) h.textContent = buckets.error;
+  else if (v && buckets.all.length && !buckets.all.includes(v)) {
+    h.classList.add("warn");
+    h.textContent = "! Not in your bucket list. You can still search it if your role has access.";
+  } else h.textContent = buckets.note || `${buckets.all.length.toLocaleString()} buckets. Type any part of a name, or its initials.`;
+}
+
+function ago(at) {
+  const min = Math.round((Date.now() - at) / 60000);
+  if (min < 1) return "just now";
+  if (min < 60) return `${min} min ago`;
+  const h = Math.round(min / 60);
+  return h < 48 ? `${h} h ago` : `${Math.round(h / 24)} days ago`;
+}
+
 async function loadBuckets() {
-  const q = new URLSearchParams({ profile: $("profile").value.trim(), region: $("region").value.trim() });
+  const token = ++buckets.token;
+  const { profile, region } = aws();
+  const key = `${profile}|${region}`;
+  let cache = {};
+  try { cache = JSON.parse(localStorage.getItem(BUCKET_CACHE)) || {}; } catch { /* ignore bad saved data */ }
+  const saved = cache[key];
+  // show the saved list straight away, then refresh it
+  Object.assign(buckets, { all: saved ? saved.buckets : [], loaded: !!saved, error: null, note: null });
+  $("reloadBuckets").disabled = true;
+  $("reloadBuckets").textContent = "Reloading…";
+  bucketHint();
+  bucketCombo.refresh();
   try {
-    const res = await fetch(`../plugins/${PLUGIN}/buckets?${q}`);
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error);
-    $("bucketList").replaceChildren(...data.buckets.map((b) => Object.assign(document.createElement("option"), { value: b })));
-    $("bucketHint").textContent = `${data.buckets.length.toLocaleString()} buckets available. Start typing to filter.`;
+    const res = await fetch(`../plugins/${PLUGIN}/buckets?${new URLSearchParams({ profile, region })}`);
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || `The server answered HTTP ${res.status}.`);
+    if (token !== buckets.token) return;
+    Object.assign(buckets, { all: data.buckets, loaded: true });
+    cache[key] = { at: Date.now(), buckets: data.buckets };
+    localStorage.setItem(BUCKET_CACHE, JSON.stringify(cache));
   } catch (e) {
-    $("bucketHint").textContent = "Couldn't load the bucket list. You can still type a bucket name.";
+    if (token !== buckets.token) return;
+    const why = e.message === "Failed to fetch" ? "Can't reach the app server." : e.message;
+    buckets.loaded = true;
+    if (saved) buckets.note = `Showing the list saved ${ago(saved.at)}; couldn't refresh it. ${why}`;
+    else buckets.error = `Couldn't load the bucket list. ${why} You can still type a bucket name.`;
+  } finally {
+    if (token === buckets.token) {
+      $("reloadBuckets").disabled = false;
+      $("reloadBuckets").textContent = "Reload list";
+      bucketHint();
+      bucketCombo.refresh();
+    }
   }
+}
+
+/* Folder suggestions list one level at a time, like `aws s3 ls`: typing "reports/" lists
+   the folders inside reports/, and the text after the last "/" filters them. */
+const folderKey = (bucket, parent) => { const a = aws(); return `${a.profile}|${a.region}|${bucket}|${parent}`; };
+const splitPrefix = (v) => { const i = v.lastIndexOf("/"); return [v.slice(0, i + 1), v.slice(i + 1)]; };
+
+async function loadFolders(bucket, parent) {
+  const key = folderKey(bucket, parent);
+  folders.set(key, { state: "loading" });
+  try {
+    const res = await fetch(`../plugins/${PLUGIN}/folders?${new URLSearchParams({ bucket, prefix: parent, ...aws() })}`);
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || `The server answered HTTP ${res.status}.`);
+    folders.set(key, { state: "ok", list: data.folders, truncated: data.truncated });
+  } catch (e) {
+    const error = e.message === "Failed to fetch" ? "Can't reach the app server." : e.message;
+    folders.set(key, { state: "error", error, at: Date.now() });
+  }
+  folderCombo.refresh();
+}
+
+const folderCombo = new Combobox($("prefix"), {
+  labelledBy: "prefixLabel",
+  source(text) {
+    const bucket = $("bucket").value.trim();
+    if (!bucket) return { empty: "Choose a bucket first to see its folders." };
+    const [parent, part] = splitPrefix(text);
+    const where = `${bucket}/${parent}`;
+    const key = folderKey(bucket, parent);
+    const cached = folders.get(key);
+    // a failed listing is retried after a few seconds, not on every key press
+    if (!cached || (cached.state === "error" && Date.now() - cached.at > 5000)) loadFolders(bucket, parent);
+    const entry = folders.get(key);
+    if (entry.state === "loading") return { empty: `Loading folders in ${where}…` };
+    if (entry.state === "error") return { empty: `✕ ${entry.error}` };
+    const n = entry.list.length;
+    const res = Combobox.filter(entry.list, part, { text: (f) => f.slice(parent.length), offset: () => parent.length });
+    return {
+      ...res,
+      preselect: part !== "",
+      count: `${part ? `${res.matched.toLocaleString()} of ` : ""}${n.toLocaleString()}${entry.truncated ? "+" : ""} folders in ${where}`,
+      empty: n ? `No folder in ${where} matches “${part}”. You can still search it by that name.`
+        : `No folders inside ${where}. Search here, or delete back to the previous /.`,
+    };
+  },
+  // after picking a folder, keep the list open on the folders inside it
+  onPick: () => true,
+});
+
+function syncFolderSuggest() {
+  const on = $("suggestFolders").checked;
+  folderCombo.enabled = on;
+  localStorage.setItem(SUGGEST_FOLDERS, on ? "1" : "");
 }
 
 /* ---------- search ---------- */
@@ -413,6 +567,9 @@ async function search(ev) {
   const problem = validate();
   if (problem) return showAlert(problem);
   save();
+  bucketCombo.close();
+  folderCombo.close();
+  rememberBucket($("bucket").value.trim());
 
   const body = {
     bucket: $("bucket").value.trim(),
@@ -602,6 +759,17 @@ setEnabled(false);
 document.querySelectorAll('input[name="mode"]').forEach((r) => r.addEventListener("change", () => { syncMode(); save(); }));
 FIELDS.forEach((f) => $(f).addEventListener("change", save));
 $("caseSensitive").addEventListener("change", save);
+
+$("bucket").addEventListener("blur", bucketHint);
+$("bucket").addEventListener("change", bucketHint);
+$("suggestFolders").checked = localStorage.getItem(SUGGEST_FOLDERS) === "1";
+syncFolderSuggest();
+$("suggestFolders").addEventListener("change", () => {
+  syncFolderSuggest();
+  if ($("suggestFolders").checked) $("prefix").focus();
+});
+$("reloadBuckets").addEventListener("click", loadBuckets);
+["profile", "region"].forEach((f) => $(f).addEventListener("change", loadBuckets));
 $("form").addEventListener("submit", search);
 $("form").addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) search(e); });
 $("stopBtn").addEventListener("click", () => {
