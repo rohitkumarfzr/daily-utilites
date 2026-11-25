@@ -108,6 +108,7 @@
     .kind { white-space: nowrap; font-weight: 600; }
     .kind .glyph { display: inline-block; width: 1.2em; }
     .row-copy { padding: 2px 8px; font-size: var(--t-xs); }
+    .found .acts { white-space: nowrap; text-align: right; }
 
     @media (max-width: 860px) {
       .layout { grid-template-columns: 1fr; height: auto; }
@@ -252,7 +253,7 @@
       <p class="note" id="note" hidden></p>
       <div class="table-wrap">
         <table class="found">
-          <thead><tr><th>Type</th><th>Path</th><th class="num">Size</th><th class="when">Modified</th><th><span class="sr-only">Copy</span></th></tr></thead>
+          <thead><tr><th>Type</th><th>Path</th><th class="num">Size</th><th class="when">Modified</th><th><span class="sr-only">Actions</span></th></tr></thead>
           <tbody id="rows"></tbody>
         </table>
       </div>
@@ -717,7 +718,14 @@ function render(data) {
     dir.className = "dir";
     dir.textContent = slash >= 0 ? r.key.slice(0, slash + 1) : "";
     path.append(dir, document.createTextNode(slash >= 0 ? r.key.slice(slash + 1) : r.key));
-    const copy = cell();
+    const copy = cell("acts");
+    if (r.kind !== "folder") {
+      const open = Object.assign(document.createElement("button"), { type: "button", className: "btn btn-quiet row-copy", textContent: "Open" });
+      open.setAttribute("aria-label", `Open ${r.key} in a new tab`);
+      open.title = "Opens a private link that works for 1 hour";
+      open.addEventListener("click", () => openObject(data.bucket, r.key, open));
+      copy.append(open);
+    }
     const btn = Object.assign(document.createElement("button"), { type: "button", className: "btn btn-quiet row-copy", textContent: "Copy" });
     btn.setAttribute("aria-label", `Copy s3://${data.bucket}/${r.key}`);
     btn.addEventListener("click", () => copyText(`s3://${data.bucket}/${r.key}`, btn));
@@ -734,6 +742,27 @@ function render(data) {
   }
   $("rows").replaceChildren(...rows);
   $("copyBtn").disabled = !n;
+}
+
+/* Open a file through a short-lived signed link. The tab opens first (inside the click) so the popup blocker allows it. */
+async function openObject(bucket, key, btn) {
+  const win = window.open("", "_blank");
+  if (win) win.document.title = "Opening…";
+  btn.disabled = true;
+  btn.textContent = "Opening…";
+  try {
+    const res = await fetch(`../plugins/${PLUGIN}/link?${new URLSearchParams({ bucket, key, ...aws() })}`);
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok || !body.url) throw new Error(body.error || `The server answered ${res.status}.`);
+    if (win) { win.opener = null; win.location.replace(body.url); }
+    else window.open(body.url, "_blank", "noopener");
+  } catch (e) {
+    if (win) win.close();
+    showAlert(`Couldn't open ${key}. ${e.message}`);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Open";
+  }
 }
 
 async function copyText(text, btn) {
